@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/domain"
+	"github.com/anandmindfire/data-processing-pipeline/internal/domain"
 )
 
 func TestStorePersistenceAndRetrieval(t *testing.T) {

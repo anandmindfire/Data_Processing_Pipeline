@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 // readCSV streams rows from a CSV reader and emits records via emit callback.

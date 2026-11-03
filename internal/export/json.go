@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 // writeJSON serializes records as formatted JSON into the given writer.

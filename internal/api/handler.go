@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/jobs"
-	"github.com/anandkr47/data-processing-pipeline/internal/metrics"
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/jobs"
+	"github.com/anandmindfire/data-processing-pipeline/internal/metrics"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

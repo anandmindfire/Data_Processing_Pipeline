@@ -1,6 +1,6 @@
 package domain
 
-import "github.com/anandkr47/data-processing-pipeline/internal/models"
+import "github.com/anandmindfire/data-processing-pipeline/internal/models"
 
 // Type aliases to preserve backward compatibility while standardizing on internal/models.
 type (

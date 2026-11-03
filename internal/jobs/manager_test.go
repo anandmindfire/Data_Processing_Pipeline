@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/config"
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
-	"github.com/anandkr47/data-processing-pipeline/internal/storage"
+	"github.com/anandmindfire/data-processing-pipeline/internal/config"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/storage"
 )
 
 type mockExecutor struct {

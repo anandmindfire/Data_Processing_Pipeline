@@ -6,7 +6,7 @@ import (
 	"io"
 	"sort"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 // writeCSV serializes records into CSV with sorted, deterministic column headers.

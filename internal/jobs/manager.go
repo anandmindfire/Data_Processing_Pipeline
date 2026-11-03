@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/config"
-	"github.com/anandkr47/data-processing-pipeline/internal/metrics"
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
-	"github.com/anandkr47/data-processing-pipeline/internal/storage"
+	"github.com/anandmindfire/data-processing-pipeline/internal/config"
+	"github.com/anandmindfire/data-processing-pipeline/internal/metrics"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/storage"
 )
 
 // PipelineExecutor is the behavior required by Job Manager to run a pipeline.

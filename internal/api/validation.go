@@ -3,7 +3,7 @@ package api
 import (
 	"fmt"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 // ValidateJobConfig checks that the submitted job config contains necessary definitions.

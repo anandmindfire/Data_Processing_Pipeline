@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
