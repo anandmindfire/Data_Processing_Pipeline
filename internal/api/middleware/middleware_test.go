@@ -50,4 +50,3 @@ func TestRateLimiterMiddleware(t *testing.T) {
 		t.Fatalf("expected 429 Too Many Requests, got %d", rec.Code)
 	}
 }
-

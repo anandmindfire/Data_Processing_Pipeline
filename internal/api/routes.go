@@ -10,17 +10,11 @@ import (
 func (s *Server) setupRoutes() {
 	mux := http.NewServeMux()
 
-	// Health and Observability
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
+	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/metrics", s.handleMetrics)
-
-	// Job Management API v1
 	mux.HandleFunc("/api/v1/pipelines", s.handlePipelinesCollection)
 	mux.HandleFunc("/api/v1/pipelines/", s.handlePipelineItem)
 
-	// Build middleware chain
 	var handler http.Handler = mux
 	if s.rateLimiter != nil {
 		handler = s.rateLimiter.Middleware(handler)
@@ -30,4 +24,3 @@ func (s *Server) setupRoutes() {
 
 	s.handler = handler
 }
-

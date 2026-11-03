@@ -108,4 +108,3 @@ func TestStoreCorruptedFile(t *testing.T) {
 		t.Fatal("expected empty store")
 	}
 }
-

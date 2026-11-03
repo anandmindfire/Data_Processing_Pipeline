@@ -105,4 +105,3 @@ func extractIP(r *http.Request) string {
 	}
 	return host
 }
-
