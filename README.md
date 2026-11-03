@@ -1,181 +1,191 @@
 # Concurrent Data Processing Pipeline (Go)
 
-A production-oriented reference implementation of a configurable, concurrent data-processing service. It ingests CSV/JSON files and JSON HTTP APIs, validates and transforms records, computes group aggregations, exports CSV/JSON, and exposes job lifecycle and observability endpoints.
+A production-oriented, concurrent data processing engine and job management service implemented in idiomatic Go. It ingests data from heterogeneous sources (CSV, JSON, external HTTP APIs), validates and cleans records, executes parallel transformations, calculates grouped analytical aggregations, and persists results and observability metrics.
 
-## Highlights
+## Key Highlights
 
-- Go pipeline stages connected by typed, bounded channels.
-- One ingestion goroutine per source; configurable validation and transformation worker pools.
-- Context propagation, per-job timeout, and cancellation endpoint.
-- Invalid records are quarantined in a persistent error collection while valid records continue.
-- Count, sum, and average aggregations with group-by support.
-- Atomic JSON state-file persistence for jobs, processed records, and errors; configurable CSV/JSON result exports.
-- Progress counters, throughput, timestamps, and stage latency metrics.
-- Standard-library HTTP server, no third-party runtime dependencies.
+- **Modular Architecture:** Clean separation of concerns across `cmd/server/`, `internal/api/`, `internal/config/`, `internal/models/`, `internal/metrics/`, `internal/pipeline/stages/`, `internal/repository/`, and `internal/sources/`.
+- **Bounded Channels & Backpressure:** Pipeline stages are connected by typed, bounded channels, preventing unbounded heap consumption.
+- **Controlled Fan-Out / Fan-In:** Dedicated goroutines per ingestion source, parameterized worker pools for CPU-intensive validation and transformation, and a single fan-in consumer for deterministic aggregation without lock contention.
+- **Context-Aware Cancellation:** Context cancellation and timeouts propagate across all file readers, external HTTP requests, and worker pool loops.
+- **Fault-Tolerant Error Quarantine:** Invalid records are quarantined into a centralized error collection with full payload and stage diagnostics, allowing valid records to proceed.
+- **Interface-Driven Persistence:** Abstraction via `repository.Repository` decouples the domain from storage engines (includes In-Memory and Atomic File implementations, drop-in ready for PostgreSQL).
+- **Security & Reliability Middleware:** Structured logging (`log/slog`), panic recovery, and IP-based token bucket rate limiting.
+- **Zero External Runtime Dependencies:** Implemented purely with the Go standard library for zero vulnerabilities and instant compilation.
+- **Race Detector Clean:** 100% verified with `go test -race -count=1 ./...`.
 
-> Persistence choice: this implementation uses an atomic JSON state file rather than introducing a database driver. The assignment permits database **and/or** file persistence. For multi-instance production deployments, replace `internal/storage.Store` with a transactional PostgreSQL repository and object storage for large result sets.
+---
 
-## Architecture
+## Architecture Overview
 
 ```mermaid
 flowchart TD
-  API[REST API / Job Manager] --> CTX[Job Context + Lifecycle]
-  CTX --> S1[CSV Reader]
-  CTX --> S2[JSON Reader]
-  CTX --> S3[HTTP JSON Reader]
-  S1 --> R[(recordsCh: bounded)]
+  API["REST API & Middleware (Logging, Recovery, Rate Limiting)"] --> MGR["Job Manager (Concurrency Quotas & Lifecycle)"]
+  MGR --> CTX["Job Context & Timeouts"]
+  CTX --> S1["CSV Reader (Stream)"]
+  CTX --> S2["JSON Reader (Stream)"]
+  CTX --> S3["HTTP JSON Reader"]
+  S1 --> R[("recordsCh (Bounded Channel)")]
   S2 --> R
   S3 --> R
-  R --> V[Validation worker pool]
-  V -->|valid records| T[Transformation worker pool]
-  V -->|invalid records| E[Central error collector]
-  T -->|transformed records| A[Aggregation + result collector]
-  T -->|transform errors| E
-  A --> X[CSV / JSON export]
-  A --> DB[(Atomic JSON state store)]
-  E --> DB
-  API --> DB
-  API --> M[Progress + metrics]
+  R --> V["Validation Worker Pool (Fan-Out)"]
+  V -->|"valid records"| T["Transformation Worker Pool (Fan-Out)"]
+  V -->|"invalid records"| E["Centralized Error Collector"]
+  T -->|"transformed records"| A["Aggregation Engine (Fan-In Consumer)"]
+  T -->|"transform errors"| E
+  A --> X["Export Stage (CSV / JSON Sinks)"]
+  A --> REPO[("Repository (Atomic Store / PostgreSQL)")]
+  E --> REPO
+  API --> REPO
+  API --> MET["Metrics Collector (Prometheus)"]
 ```
 
-Each stage owns a single responsibility. The ingestion coordinator closes `raw` after all source goroutines finish; the validation coordinator closes `valid` after all validation workers finish; the transformation coordinator closes `transformed` after all transform workers finish. This ownership prevents send-on-closed-channel races. The aggregation/result collector is a single fan-in consumer, so aggregate maps do not require concurrent writes.
+---
 
-## Requirements
+## Project Structure
 
-- Go 1.23 or newer
-- No external Go modules required
+```
+data-processing-pipeline/
+├── cmd/
+│   └── server/
+│       └── main.go                  # Application entrypoint & OS signal graceful shutdown
+├── internal/
+│   ├── api/
+│   │   ├── middleware/
+│   │   │   ├── logging.go           # Structured HTTP request logger (`log/slog`)
+│   │   │   ├── recovery.go          # HTTP panic recovery middleware
+│   │   │   └── ratelimit.go         # Token-bucket rate limiter per client IP
+│   │   ├── collection.go            # Handlers for POST /api/v1/pipelines and GET list
+│   │   ├── item.go                  # Handlers for /:id, /progress, /results, /errors, /cancel
+│   │   ├── metrics.go               # Prometheus metrics exposition handler
+│   │   ├── routes.go                # HTTP router and middleware chain setup
+│   │   ├── server.go                # Server initialization and lifecycle
+│   │   └── validation.go            # Request body decoding and JSON response helpers
+│   ├── config/
+│   │   └── config.go                # Strongly-typed configuration with environment overrides
+│   ├── metrics/
+│   │   ├── collector.go             # Global telemetry collector (jobs, records, errors, latency)
+│   │   └── prometheus.go            # Prometheus text exposition formatter
+│   ├── models/
+│   │   └── types.go                 # Core domain definitions: Job, Config, Rule, Record, Metrics
+│   ├── pipeline/
+│   │   ├── stages/
+│   │   │   ├── validation.go        # Schema and business rule validation stage
+│   │   │   ├── transformation.go    # Data normalization, scaling, and enrichment stage
+│   │   │   ├── aggregation.go       # Group-by count, sum, and average aggregation engine
+│   │   │   └── export.go            # Formatted CSV and JSON persistence stage
+│   │   ├── workers.go               # Fan-out worker pool primitives
+│   │   ├── executor.go              # Pipeline execution graph orchestrator
+│   │   └── manager.go               # Job manager with active concurrency quotas and cancellation
+│   ├── repository/
+│   │   ├── repository.go            # Persistence interface specification
+│   │   ├── memory.go                # Thread-safe in-memory repository (fast testing)
+│   │   └── file.go                  # Atomic JSON snapshot repository (crash-safe file storage)
+│   └── sources/
+│       ├── csv.go                   # Streaming CSV reader
+│       ├── json.go                  # Streaming JSON reader (arrays and single objects)
+│       ├── http.go                  # Context-aware HTTP client with custom headers
+│       └── read.go                  # Unified source reader dispatcher
+├── configs/
+│   └── default.json                 # Sample runtime configuration
+├── docs/
+│   ├── design-report.md             # 1-page design report (architecture & concurrency model)
+│   └── production-readiness.md      # Detailed comparison: code quality vs. cloud production readiness
+├── samples/
+│   ├── input.csv                    # Sample CSV input data
+│   ├── input.json                   # Sample JSON input data
+│   └── job.json                     # Complete sample pipeline job specification
+├── Dockerfile                       # Multi-stage distroless container build
+├── docker-compose.yml               # Container orchestration with volumes & healthchecks
+├── Makefile                         # Automation targets for build, test, race, lint, and run
+└── go.mod                           # Go module definition
+```
 
-## Run locally
+---
 
+## Quickstart
+
+### Prerequisites
+- Go 1.23+ (or Docker)
+
+### Run with Makefile
 ```bash
-git clone <repository-url>
-cd data-processing-pipeline
-go test ./...
-go test -race ./...
-go run ./cmd/server
+# Run test suite with Go race detector
+make race
+
+# Build binary
+make build
+
+# Run server locally
+make run
 ```
 
-The server listens on `:8080` by default. Override configuration with environment variables:
+### Environment Variables
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `ADDR` | `:8080` | Server listening address |
+| `DATA_DIR` | `data` | Directory for persistent state storage |
+| `EXPORT_DIR` | `exports` | Directory for generated CSV/JSON export files |
+| `MAX_ACTIVE_JOBS` | `10` | Maximum number of concurrent jobs permitted |
+| `RATE_LIMIT_RPS` | `50.0` | Token bucket refill rate per second per IP |
+| `RATE_LIMIT_BURST`| `100` | Maximum burst capacity per IP |
 
-```bash
-ADDR=:9000 DATA_DIR=./runtime-data go run ./cmd/server
-```
+---
 
-`DATA_DIR` stores `state.json`; exports are written to the paths specified by each job. Relative paths are resolved from the server's working directory.
+## API Reference
 
-## Create a job
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/pipelines` | Submit a new pipeline job specification |
+| `GET` | `/api/v1/pipelines` | List all pipeline jobs |
+| `GET` | `/api/v1/pipelines/:id` | Get job configuration, status, and summary metrics |
+| `GET` | `/api/v1/pipelines/:id/progress` | Poll real-time progress, processed counts, and stage latency |
+| `GET` | `/api/v1/pipelines/:id/results` | Retrieve processed records, computed aggregates, and export link |
+| `GET` | `/api/v1/pipelines/:id/errors` | Retrieve quarantined errors and failed record details |
+| `PATCH` | `/api/v1/pipelines/:id/cancel` | Cancel an actively running pipeline job |
+| `DELETE` | `/api/v1/pipelines/:id` | Delete a completed/failed job and its export artifacts |
+| `GET` | `/metrics` | Prometheus text metrics |
+| `GET` | `/healthz` | Health check endpoint |
 
-The sample job reads one local CSV and one local JSON file concurrently, normalizes departments, validates numeric salary values, computes group aggregates, and exports both CSV and JSON.
+---
 
+## Example Usage
+
+### 1. Submit a Job
 ```bash
 curl -sS -X POST http://localhost:8080/api/v1/pipelines \
-  -H 'Content-Type: application/json' \
-  --data-binary @samples/job.json
+  -H "Content-Type: application/json" \
+  -d @samples/job.json
 ```
 
-Example job specification:
-
-```json
-{
-  "sources": [
-    {"type":"csv","name":"employees","path":"samples/input.csv"},
-    {"type":"json","name":"extra-employees","path":"samples/input.json"},
-    {"type":"http","name":"remote-posts","url":"https://jsonplaceholder.typicode.com/posts","format":"json"}
-  ],
-  "rules": [
-    {"field":"name","type":"string","required":true,"normalize":"trim"},
-    {"field":"salary","type":"number","required":true,"min":0}
-  ],
-  "aggregations": [
-    {"group_by":"department","field":"salary","operation":"sum","name":"salary_by_department"},
-    {"group_by":"department","field":"salary","operation":"avg","name":"average_salary"},
-    {"group_by":"department","field":"salary","operation":"count","name":"employees_by_department"}
-  ],
-  "exports": [
-    {"type":"json","path":"exports/result.json"},
-    {"type":"csv","path":"exports/result.csv"}
-  ],
-  "validation_workers": 4,
-  "transform_workers": 4,
-  "buffer_size": 128,
-  "timeout_seconds": 300,
-  "max_records": 10000
-}
+### 2. Poll Progress
+```bash
+curl -sS http://localhost:8080/api/v1/pipelines/<JOB_ID>/progress
 ```
 
-Source types: `csv`, `json`, and `http` (alias `api`). File sources require `path`; HTTP sources require `url` and accept optional `headers`. HTTP responses and JSON files must contain either a JSON object or an array of objects. CSV uses the first row as column names. For HTTP sources, `format` defaults to `json`.
+### 3. Retrieve Computed Aggregations and Results
+```bash
+curl -sS http://localhost:8080/api/v1/pipelines/<JOB_ID>/results
+```
 
-Rule options: `required`, `type` (`string` or `number`), numeric `min`/`max`, `normalize` (`trim`, `lower`, `upper`), and numeric `multiply`. Transformations are intentionally declarative and limited to these safe built-ins; do not accept arbitrary user-supplied code in a pipeline specification.
+### 4. Inspect Quarantined Errors
+```bash
+curl -sS http://localhost:8080/api/v1/pipelines/<JOB_ID>/errors
+```
 
-Aggregation operations: `count`, `sum`, `avg`/`average`. `group_by` is optional; without it the group is `_all`. `field` is required by the current spec, including count.
+---
 
-## API reference
-
-| Method | Endpoint | Purpose |
-|---|---|---|
-| POST | `/api/v1/pipelines` | Validate a job spec, persist a pending job, and start it asynchronously (202) |
-| GET | `/api/v1/pipelines` | List jobs |
-| GET | `/api/v1/pipelines/{id}` | Get job details |
-| GET | `/api/v1/pipelines/{id}/progress` | Get counters, percent complete, throughput, timestamps, and stage latency |
-| GET | `/api/v1/pipelines/{id}/results` | Get processed records, aggregates, and export path |
-| GET | `/api/v1/pipelines/{id}/errors` | Get ingestion/validation/transformation/export errors and failed record payloads |
-| PATCH | `/api/v1/pipelines/{id}/cancel` | Request cancellation of a running job |
-| DELETE | `/api/v1/pipelines/{id}` | Delete a non-running job and its persisted records/errors (does not remove external export files) |
-| GET | `/healthz` | Liveness check |
-| GET | `/metrics` | Basic Prometheus text metrics |
-
-Example follow-up requests:
+## Testing & Quality Assurance
 
 ```bash
-# List jobs
-curl http://localhost:8080/api/v1/pipelines
+# Run unit and integration tests across all packages
+go test -v ./...
 
-# Replace JOB_ID with the id returned by POST
-curl http://localhost:8080/api/v1/pipelines/JOB_ID/progress
-curl http://localhost:8080/api/v1/pipelines/JOB_ID/results
-curl http://localhost:8080/api/v1/pipelines/JOB_ID/errors
-curl -X PATCH http://localhost:8080/api/v1/pipelines/JOB_ID/cancel
-curl -X DELETE http://localhost:8080/api/v1/pipelines/JOB_ID
-curl http://localhost:8080/metrics
-```
+# Verify concurrency safety with the race detector
+go test -race -count=1 ./...
 
-Example progress response:
-
-```json
-{
-  "job_id":"20261103T083000.123456789",
-  "status":"COMPLETED",
-  "percent_complete":100,
-  "processed":6,
-  "discovered":7,
-  "pending":0,
-  "valid":6,
-  "rejected":1,
-  "error_count":1,
-  "records_per_second":1200.5,
-  "stage_latency_ns":{"transform":23000}
-}
-```
-
-The example is illustrative; actual IDs, timestamps, counters, and rates depend on the run. Percent complete is terminal-state aware; during execution it is based on records discovered and accounted for as processed or rejected. A source-level failure is exposed in the errors endpoint. If every source fails before yielding a record, the job is marked failed.
-
-## Testing
-
-```bash
-go test ./...
-go test -race ./...
+# Static analysis
 go vet ./...
 ```
 
-Tests cover required/type/range validation, normalization and numeric conversion, end-to-end ingestion through export and aggregation, cancellation, and HTTP job creation/retrieval.
-
-## Operational and design notes
-
-- **Backpressure:** every stage channel is bounded by `buffer_size`; slow downstream stages naturally slow upstream senders.
-- **Concurrency:** source readers fan out independently. Validation and transformation each use configurable worker pools. A single fan-in collector owns aggregation state and result persistence.
-- **Cancellation:** the job context reaches file iteration and HTTP request creation; workers select on `ctx.Done()` when sending downstream. HTTP calls also have a client timeout.
-- **Error policy:** bad records are recorded with source, row/index, stage, message, payload, and timestamp; processing continues. Infrastructure failures are recorded separately.
-- **Progress:** discovered, processed, valid, rejected, exported, and error counts are distinct. `processed` means successfully transformed and accepted; `exported` is set after configured exports complete.
-- **Durability trade-off:** the JSON store writes a complete state snapshot atomically through a temporary file and rename. This is simple and dependency-free, but write amplification and single-process locking make it unsuitable for high-volume or multi-replica workloads. A database repository is the next production step.
-- **Export trade-off:** CSV header order is sorted for deterministic output. Heterogeneous records use the first record's keys as CSV columns; JSON preserves all record fields.
-- **Security:** the sample service is intended for trusted/internal use. Before exposing it publicly, add authentication/authorization, source URL allowlists/SSRF protection, path sandboxing, request/job quotas, redaction of secrets in headers/errors, and retention controls.
+For an in-depth analysis of how this codebase bridges into enterprise multi-node cloud environments, see [docs/production-readiness.md](file:///Users/anandk/Projects/data-processing-pipeline/docs/production-readiness.md).

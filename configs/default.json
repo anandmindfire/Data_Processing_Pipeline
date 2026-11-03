@@ -1,0 +1,12 @@
+{
+  "server_port": "8080",
+  "server_addr": ":8080",
+  "data_dir": "data",
+  "export_dir": "exports",
+  "max_active_jobs": 10,
+  "default_timeout_seconds": 300,
+  "max_request_body_bytes": 2097152,
+  "rate_limit_rps": 50.0,
+  "rate_limit_burst": 100
+}
+

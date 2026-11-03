@@ -1,130 +1,83 @@
 package storage
 
 import (
-	"encoding/json"
-	"errors"
+	"context"
+
 	"github.com/anandkr47/data-processing-pipeline/internal/domain"
-	"os"
-	"path/filepath"
-	"sync"
+	"github.com/anandkr47/data-processing-pipeline/internal/repository"
 )
 
+// Store is an adapter over repository.FileRepository to preserve backward compatibility.
 type Store struct {
-	mu      sync.RWMutex
-	dir     string
-	jobs    map[string]*domain.Job
-	errs    map[string][]domain.RecordError
-	records map[string][]domain.Record
+	repo *repository.FileRepository
 }
 
+// New creates or loads a Store from dir.
 func New(dir string) (*Store, error) {
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	r, err := repository.NewFileRepository(dir)
+	if err != nil {
 		return nil, err
 	}
-	s := &Store{dir: dir, jobs: map[string]*domain.Job{}, errs: map[string][]domain.RecordError{}, records: map[string][]domain.Record{}}
-	_ = s.load()
-	return s, nil
+	return &Store{repo: r}, nil
 }
-func (s *Store) load() error {
-	b, e := os.ReadFile(filepath.Join(s.dir, "state.json"))
-	if errors.Is(e, os.ErrNotExist) {
-		return nil
-	}
-	if e != nil {
-		return e
-	}
-	var v struct {
-		Jobs    map[string]*domain.Job          `json:"jobs"`
-		Errors  map[string][]domain.RecordError `json:"errors"`
-		Records map[string][]domain.Record      `json:"records"`
-	}
-	if e = json.Unmarshal(b, &v); e != nil {
-		return e
-	}
-	if v.Jobs != nil {
-		s.jobs = v.Jobs
-	}
-	if v.Errors != nil {
-		s.errs = v.Errors
-	}
-	if v.Records != nil {
-		s.records = v.Records
-	}
-	return nil
-}
-func (s *Store) persistLocked() error {
-	b, e := json.MarshalIndent(struct {
-		Jobs    map[string]*domain.Job          `json:"jobs"`
-		Errors  map[string][]domain.RecordError `json:"errors"`
-		Records map[string][]domain.Record      `json:"records"`
-	}{s.jobs, s.errs, s.records}, "", "  ")
-	if e != nil {
-		return e
-	}
-	tmp := filepath.Join(s.dir, "state.tmp")
-	if e = os.WriteFile(tmp, b, 0644); e != nil {
-		return e
-	}
-	return os.Rename(tmp, filepath.Join(s.dir, "state.json"))
-}
-func cloneJob(j *domain.Job) *domain.Job {
-	b, _ := json.Marshal(j)
-	var c domain.Job
-	_ = json.Unmarshal(b, &c)
-	return &c
-}
+
+// PutJob stores a job.
 func (s *Store) PutJob(j *domain.Job) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.jobs[j.ID] = cloneJob(j)
-	return s.persistLocked()
+	return s.repo.SaveJob(context.Background(), j)
 }
+
+// GetJob retrieves a job by ID.
 func (s *Store) GetJob(id string) (*domain.Job, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	j, ok := s.jobs[id]
-	if !ok {
+	j, found, err := s.repo.GetJob(context.Background(), id)
+	if err != nil || !found {
 		return nil, false
 	}
-	c := cloneJob(j)
-	return c, true
+	return j, true
 }
+
+// ListJobs returns all jobs.
 func (s *Store) ListJobs() []domain.Job {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]domain.Job, 0, len(s.jobs))
-	for _, j := range s.jobs {
-		out = append(out, *cloneJob(j))
+	jobs, err := s.repo.ListJobs(context.Background())
+	if err != nil {
+		return nil
 	}
-	return out
+	return jobs
 }
+
+// DeleteJob deletes a job.
 func (s *Store) DeleteJob(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.jobs, id)
-	delete(s.errs, id)
-	delete(s.records, id)
-	return s.persistLocked()
+	return s.repo.DeleteJob(context.Background(), id)
 }
+
+// AddError records an error.
 func (s *Store) AddError(id string, e domain.RecordError) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.errs[id] = append(s.errs[id], e)
-	return s.persistLocked()
+	return s.repo.AddError(context.Background(), id, e)
 }
+
+// Errors retrieves errors for a job.
 func (s *Store) Errors(id string) []domain.RecordError {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return append([]domain.RecordError(nil), s.errs[id]...)
+	errs, err := s.repo.GetErrors(context.Background(), id)
+	if err != nil {
+		return nil
+	}
+	return errs
 }
+
+// AddRecord stores a record.
 func (s *Store) AddRecord(id string, r domain.Record) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.records[id] = append(s.records[id], r)
-	return s.persistLocked()
+	return s.repo.SaveRecord(context.Background(), id, r)
 }
+
+// Records returns all records for a job.
 func (s *Store) Records(id string) []domain.Record {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return append([]domain.Record(nil), s.records[id]...)
+	recs, err := s.repo.GetRecords(context.Background(), id)
+	if err != nil {
+		return nil
+	}
+	return recs
+}
+
+// Repository returns the underlying repository.FileRepository.
+func (s *Store) Repository() *repository.FileRepository {
+	return s.repo
 }
