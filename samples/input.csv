@@ -1,0 +1,6 @@
+name,department,salary
+Alice,Engineering,120000
+Bob,Sales,90000
+Cara,Engineering,135000
+Dan,Sales,80000
+Eve,Engineering,invalid

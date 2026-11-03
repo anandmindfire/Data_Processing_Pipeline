@@ -1,0 +1,4 @@
+/data/
+/exports/*
+!/exports/.gitkeep
+*.test
