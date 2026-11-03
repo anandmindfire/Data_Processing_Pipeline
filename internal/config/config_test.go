@@ -36,4 +36,3 @@ func TestConfigEnvOverrides(t *testing.T) {
 		t.Fatalf("expected 25, got %d", cfg.MaxActiveJobs)
 	}
 }
-

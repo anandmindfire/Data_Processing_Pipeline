@@ -36,4 +36,3 @@ func TestMetricsCollectorAndPrometheus(t *testing.T) {
 		t.Fatalf("missing processed metric: %s", prom)
 	}
 }
-

@@ -52,4 +52,3 @@ func (c *Collector) FormatPrometheus() string {
 
 	return sb.String()
 }
-

@@ -8,18 +8,18 @@ import (
 
 // Collector tracks service-level telemetry and pipeline metrics.
 type Collector struct {
-	mu                     sync.RWMutex
-	jobsTotal              int64
-	jobsCompleted          int64
-	jobsFailed             int64
-	jobsCancelled          int64
-	recordsProcessedTotal  int64
-	recordsRejectedTotal   int64
-	recordsExportedTotal   int64
-	errorsTotal            int64
-	activeJobs             int64
-	stageDurationSum       map[string]time.Duration
-	stageDurationCount     map[string]int64
+	mu                    sync.RWMutex
+	jobsTotal             int64
+	jobsCompleted         int64
+	jobsFailed            int64
+	jobsCancelled         int64
+	recordsProcessedTotal int64
+	recordsRejectedTotal  int64
+	recordsExportedTotal  int64
+	errorsTotal           int64
+	activeJobs            int64
+	stageDurationSum      map[string]time.Duration
+	stageDurationCount    map[string]int64
 }
 
 // GlobalCollector is the singleton metrics instance.
@@ -124,4 +124,3 @@ func (c *Collector) GetSnapshot() Snapshot {
 		StageAvgLatency:       avgLatency,
 	}
 }
-
