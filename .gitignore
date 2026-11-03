@@ -2,3 +2,5 @@
 /exports/*
 !/exports/.gitkeep
 *.test
+bin/
+*.tmp

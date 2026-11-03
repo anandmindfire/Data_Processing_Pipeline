@@ -1,0 +1,39 @@
+package metrics
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestMetricsCollectorAndPrometheus(t *testing.T) {
+	c := NewCollector()
+	c.IncJobsTotal()
+	c.AddRecordsProcessed(10)
+	c.AddRecordsRejected(2)
+	c.AddErrors(3)
+	c.ObserveStageLatency("validation", 15*time.Millisecond)
+
+	s := c.GetSnapshot()
+	if s.JobsTotal != 1 || s.ActiveJobs != 1 {
+		t.Fatalf("unexpected jobs count: %+v", s)
+	}
+	if s.RecordsProcessedTotal != 10 {
+		t.Fatalf("expected 10 records, got %d", s.RecordsProcessedTotal)
+	}
+
+	c.IncJobsCompleted()
+	s = c.GetSnapshot()
+	if s.JobsCompleted != 1 || s.ActiveJobs != 0 {
+		t.Fatalf("expected 1 completed and 0 active, got %+v", s)
+	}
+
+	prom := c.FormatPrometheus()
+	if !strings.Contains(prom, "pipeline_jobs_total 1") {
+		t.Fatalf("missing metric in output: %s", prom)
+	}
+	if !strings.Contains(prom, "pipeline_records_processed_total 10") {
+		t.Fatalf("missing processed metric: %s", prom)
+	}
+}
+
