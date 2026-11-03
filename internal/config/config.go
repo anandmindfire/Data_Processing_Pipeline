@@ -94,4 +94,3 @@ func getEnvFloat(key string, defaultVal float64) float64 {
 	}
 	return defaultVal
 }
-

@@ -4,17 +4,16 @@ import (
 	"context"
 
 	"github.com/anandkr47/data-processing-pipeline/internal/domain"
-	"github.com/anandkr47/data-processing-pipeline/internal/repository"
 )
 
-// Store is an adapter over repository.FileRepository to preserve backward compatibility.
+// Store is an adapter over FileRepository to preserve backward compatibility.
 type Store struct {
-	repo *repository.FileRepository
+	repo *FileRepository
 }
 
 // New creates or loads a Store from dir.
 func New(dir string) (*Store, error) {
-	r, err := repository.NewFileRepository(dir)
+	r, err := NewFileRepository(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +76,7 @@ func (s *Store) Records(id string) []domain.Record {
 	return recs
 }
 
-// Repository returns the underlying repository.FileRepository.
-func (s *Store) Repository() *repository.FileRepository {
+// Repository returns the underlying FileRepository.
+func (s *Store) Repository() *FileRepository {
 	return s.repo
 }
