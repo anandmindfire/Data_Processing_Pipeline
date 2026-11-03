@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/aggregation"
-	"github.com/anandkr47/data-processing-pipeline/internal/ingestion"
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/aggregation"
+	"github.com/anandmindfire/data-processing-pipeline/internal/ingestion"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 // Execute runs the full pipeline for a job, publishing updates to storage.

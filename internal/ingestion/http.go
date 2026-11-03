@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 // fetchHTTP retrieves payload from an HTTP/API endpoint using context and headers.

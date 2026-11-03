@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 func testRepositoryContract(t *testing.T, repo Repository) {

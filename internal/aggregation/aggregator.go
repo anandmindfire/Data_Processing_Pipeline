@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
-	"github.com/anandkr47/data-processing-pipeline/internal/validation"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/validation"
 )
 
 // Aggregator defines the behavior for accumulating and finalizing aggregate metrics.

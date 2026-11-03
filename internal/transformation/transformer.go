@@ -3,7 +3,7 @@ package transformation
 import (
 	"strings"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 // Transformer defines the behavior for applying normalization and transformations.

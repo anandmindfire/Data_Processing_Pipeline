@@ -3,7 +3,7 @@ package validation
 import (
 	"strings"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 // Validator defines the behavior for validating a record against rules.

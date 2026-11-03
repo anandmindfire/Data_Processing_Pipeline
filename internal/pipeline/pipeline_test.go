@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/export"
-	"github.com/anandkr47/data-processing-pipeline/internal/ingestion"
-	"github.com/anandkr47/data-processing-pipeline/internal/metrics"
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
-	"github.com/anandkr47/data-processing-pipeline/internal/storage"
-	"github.com/anandkr47/data-processing-pipeline/internal/transformation"
-	"github.com/anandkr47/data-processing-pipeline/internal/validation"
+	"github.com/anandmindfire/data-processing-pipeline/internal/export"
+	"github.com/anandmindfire/data-processing-pipeline/internal/ingestion"
+	"github.com/anandmindfire/data-processing-pipeline/internal/metrics"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/storage"
+	"github.com/anandmindfire/data-processing-pipeline/internal/transformation"
+	"github.com/anandmindfire/data-processing-pipeline/internal/validation"
 )
 
 func TestPipelineDirectExecution(t *testing.T) {

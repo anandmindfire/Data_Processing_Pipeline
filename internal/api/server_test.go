@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/domain"
-	"github.com/anandkr47/data-processing-pipeline/internal/storage"
+	"github.com/anandmindfire/data-processing-pipeline/internal/domain"
+	"github.com/anandmindfire/data-processing-pipeline/internal/storage"
 )
 
 func setupTestServer(t *testing.T) (*Server, *storage.Store, string) {

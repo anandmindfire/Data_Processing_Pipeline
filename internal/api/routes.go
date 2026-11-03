@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/api/middleware"
+	"github.com/anandmindfire/data-processing-pipeline/internal/api/middleware"
 )
 
 // setupRoutes initializes URL routing with middleware decorators.

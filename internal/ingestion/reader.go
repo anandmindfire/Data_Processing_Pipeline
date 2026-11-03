@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 // Reader defines the behavior for ingesting records from configured sources.

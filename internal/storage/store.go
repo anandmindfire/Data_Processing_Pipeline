@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/domain"
+	"github.com/anandmindfire/data-processing-pipeline/internal/domain"
 )
 
 // Store is an adapter over FileRepository to preserve backward compatibility.

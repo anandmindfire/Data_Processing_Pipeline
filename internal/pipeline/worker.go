@@ -5,10 +5,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/ingestion"
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
-	"github.com/anandkr47/data-processing-pipeline/internal/transformation"
-	"github.com/anandkr47/data-processing-pipeline/internal/validation"
+	"github.com/anandmindfire/data-processing-pipeline/internal/ingestion"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/transformation"
+	"github.com/anandmindfire/data-processing-pipeline/internal/validation"
 )
 
 type transformResult struct {

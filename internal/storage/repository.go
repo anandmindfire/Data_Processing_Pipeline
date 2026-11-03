@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 
-	"github.com/anandkr47/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 // Repository specifies the durable persistence contract for pipeline jobs, records, and errors.
