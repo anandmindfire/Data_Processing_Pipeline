@@ -1,0 +1,32 @@
+# Version control
+.git
+.gitignore
+
+# CI & GitHub
+.github
+
+# Documentation & tests
+docs
+test
+testdata
+*.md
+LICENSE
+
+# Binaries & build artifacts
+bin
+exports
+*.out
+*.log
+*.prof
+
+# Local configuration & secrets
+.env
+.env.*
+!.env.example
+
+# IDE & OS files
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+

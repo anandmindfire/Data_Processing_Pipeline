@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 
-	"github.com/anandmindfire/data-processing-pipeline/internal/domain"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 // Store is an adapter over FileRepository to preserve backward compatibility.
@@ -21,12 +21,12 @@ func New(dir string) (*Store, error) {
 }
 
 // PutJob stores a job.
-func (s *Store) PutJob(j *domain.Job) error {
+func (s *Store) PutJob(j *models.Job) error {
 	return s.repo.SaveJob(context.Background(), j)
 }
 
 // GetJob retrieves a job by ID.
-func (s *Store) GetJob(id string) (*domain.Job, bool) {
+func (s *Store) GetJob(id string) (*models.Job, bool) {
 	j, found, err := s.repo.GetJob(context.Background(), id)
 	if err != nil || !found {
 		return nil, false
@@ -35,7 +35,7 @@ func (s *Store) GetJob(id string) (*domain.Job, bool) {
 }
 
 // ListJobs returns all jobs.
-func (s *Store) ListJobs() []domain.Job {
+func (s *Store) ListJobs() []models.Job {
 	jobs, err := s.repo.ListJobs(context.Background())
 	if err != nil {
 		return nil
@@ -48,13 +48,27 @@ func (s *Store) DeleteJob(id string) error {
 	return s.repo.DeleteJob(context.Background(), id)
 }
 
+// AddRecord stores a processed record for a job.
+func (s *Store) AddRecord(id string, r models.Record) error {
+	return s.repo.SaveRecord(context.Background(), id, r)
+}
+
+// Records retrieves records for a job.
+func (s *Store) Records(id string) []models.Record {
+	records, err := s.repo.GetRecords(context.Background(), id)
+	if err != nil {
+		return nil
+	}
+	return records
+}
+
 // AddError records an error.
-func (s *Store) AddError(id string, e domain.RecordError) error {
+func (s *Store) AddError(id string, e models.RecordError) error {
 	return s.repo.AddError(context.Background(), id, e)
 }
 
 // Errors retrieves errors for a job.
-func (s *Store) Errors(id string) []domain.RecordError {
+func (s *Store) Errors(id string) []models.RecordError {
 	errs, err := s.repo.GetErrors(context.Background(), id)
 	if err != nil {
 		return nil
@@ -62,21 +76,7 @@ func (s *Store) Errors(id string) []domain.RecordError {
 	return errs
 }
 
-// AddRecord stores a record.
-func (s *Store) AddRecord(id string, r domain.Record) error {
-	return s.repo.SaveRecord(context.Background(), id, r)
-}
-
-// Records returns all records for a job.
-func (s *Store) Records(id string) []domain.Record {
-	recs, err := s.repo.GetRecords(context.Background(), id)
-	if err != nil {
-		return nil
-	}
-	return recs
-}
-
-// Repository returns the underlying FileRepository.
-func (s *Store) Repository() *FileRepository {
+// Repository returns the underlying storage.Repository.
+func (s *Store) Repository() Repository {
 	return s.repo
 }

@@ -24,14 +24,8 @@ func (t *RecordTransformer) Transform(r models.Record, rules []models.Rule) (mod
 	out := cloneRecord(r)
 
 	for _, rule := range rules {
-		val, ok := out[rule.Field]
-		if (!ok || val == nil || val == "") && rule.Default != nil {
-			out[rule.Field] = rule.Default
-			val = rule.Default
-			ok = true
-		}
-
-		if !ok || val == nil {
+		val := applyDefaultEnrichment(out, rule)
+		if val == nil {
 			continue
 		}
 
@@ -48,12 +42,4 @@ func (t *RecordTransformer) Transform(r models.Record, rules []models.Rule) (mod
 		}
 	}
 	return out, nil
-}
-
-func cloneRecord(r models.Record) models.Record {
-	cloned := make(models.Record, len(r))
-	for k, v := range r {
-		cloned[k] = v
-	}
-	return cloned
 }

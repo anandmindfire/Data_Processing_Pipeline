@@ -17,6 +17,7 @@ type Exporter interface {
 // FileExporter is the concrete implementation of Exporter writing to local storage.
 type FileExporter struct {
 	defaultDir string
+	factory    *ExporterFactory
 }
 
 // NewExporter creates a new FileExporter instance with fallback destination directory.
@@ -24,7 +25,10 @@ func NewExporter(defaultDir string) *FileExporter {
 	if defaultDir == "" {
 		defaultDir = "exports"
 	}
-	return &FileExporter{defaultDir: defaultDir}
+	return &FileExporter{
+		defaultDir: defaultDir,
+		factory:    NewExporterFactory(),
+	}
 }
 
 // Export serializes records to the targets specified and returns the primary output path.
@@ -46,7 +50,13 @@ func (e *FileExporter) Export(records []models.Record, targets []models.ExportTa
 			return "", fmt.Errorf("%w: create file %q: %w", ErrExportFailed, path, err)
 		}
 
-		err = writeToTarget(f, target.Type, records)
+		writer, err := e.factory.GetWriter(target.Type)
+		if err != nil {
+			_ = f.Close()
+			return "", err
+		}
+
+		err = writer(f, records)
 		closeErr := f.Close()
 		if err != nil {
 			return "", fmt.Errorf("%w: %w", ErrExportFailed, err)
@@ -67,17 +77,4 @@ func (e *FileExporter) resolvePath(target models.ExportTarget, jobID string) str
 		return target.Path
 	}
 	return filepath.Join(e.defaultDir, jobID+"."+strings.ToLower(target.Type))
-}
-
-func writeToTarget(f *os.File, targetType string, records []models.Record) error {
-	switch strings.ToLower(targetType) {
-	case "json":
-		return writeJSON(f, records)
-	case "csv":
-		return writeCSV(f, records)
-	case "sqlite", "sql":
-		return writeSQLite(f, records)
-	default:
-		return fmt.Errorf("%w: %q", ErrUnsupportedExportTarget, targetType)
-	}
 }

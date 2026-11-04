@@ -3,6 +3,8 @@ package api
 import (
 	_ "embed"
 	"net/http"
+
+	pkgresponse "github.com/anandmindfire/data-processing-pipeline/pkg/response"
 )
 
 //go:embed openapi.json
@@ -47,10 +49,11 @@ const swaggerUIHTML = `<!DOCTYPE html>
 </body>
 </html>`
 
-func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
+// HandleSwaggerUI serves the interactive Swagger UI page.
+func HandleSwaggerUI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		pkgresponse.Error(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -58,13 +61,22 @@ func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(swaggerUIHTML))
 }
 
-func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
+// HandleOpenAPISpec serves the raw OpenAPI v3.0 JSON specification.
+func HandleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		pkgresponse.Error(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(openAPISpec)
+}
+
+func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
+	HandleSwaggerUI(w, r)
+}
+
+func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
+	HandleOpenAPISpec(w, r)
 }

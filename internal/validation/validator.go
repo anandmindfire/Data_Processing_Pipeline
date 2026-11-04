@@ -2,7 +2,6 @@ package validation
 
 import (
 	"regexp"
-	"strings"
 	"sync"
 
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
@@ -53,17 +52,4 @@ func (v *RecordValidator) Validate(r models.Record, rules []models.Rule) error {
 		}
 	}
 	return nil
-}
-
-func (v *RecordValidator) validateFieldType(rule models.Rule, val any) error {
-	switch strings.ToLower(rule.Type) {
-	case "number":
-		return checkNumericRule(rule, val)
-	case "string":
-		return v.checkStringRule(rule, val)
-	case "bool", "boolean":
-		return checkBooleanRule(rule, val)
-	default:
-		return nil
-	}
 }

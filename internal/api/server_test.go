@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anandmindfire/data-processing-pipeline/internal/domain"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 	"github.com/anandmindfire/data-processing-pipeline/internal/storage"
 )
 
@@ -105,25 +105,33 @@ func TestPipelineLifecycleEndpoints(t *testing.T) {
 	}
 	outputPath := filepath.Join(dir, "out.json")
 
-	cfg := domain.Config{
-		Sources: []domain.Source{
+	cfg := models.Config{
+		Sources: []models.Source{
 			{Type: "csv", Name: "sample", Path: inputPath},
 		},
-		Rules: []domain.Rule{
+		Rules: []models.Rule{
 			{Field: "name", Type: "string", Required: true},
 			{Field: "salary", Type: "number", Required: true},
 		},
-		Aggregations: []domain.Aggregation{
+		Aggregations: []models.Aggregation{
 			{Field: "salary", Operation: "sum", Name: "total_salary"},
 		},
-		Exports: []domain.ExportTarget{
+		Exports: []models.ExportTarget{
 			{Type: "json", Path: outputPath},
 		},
 	}
 
 	body, _ := json.Marshal(cfg)
 
-	// 1. POST /api/v1/pipelines (Create)
+	jobID := testCreateAndListPipeline(t, srv, body)
+	waitForJobCompletion(t, store, jobID)
+	testJobDetailsAndProgress(t, srv, jobID)
+	testJobResultsAndErrors(t, srv, jobID)
+	testJobCancelAndDeletion(t, srv, jobID)
+}
+
+func testCreateAndListPipeline(t *testing.T, srv http.Handler, body []byte) string {
+	t.Helper()
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/pipelines", bytes.NewReader(body))
 	createRec := httptest.NewRecorder()
 	srv.ServeHTTP(createRec, createReq)
@@ -131,80 +139,87 @@ func TestPipelineLifecycleEndpoints(t *testing.T) {
 		t.Fatalf("create status %d: %s", createRec.Code, createRec.Body.String())
 	}
 
-	var createdJob domain.Job
+	var createdJob models.Job
 	if err := json.Unmarshal(createRec.Body.Bytes(), &createdJob); err != nil {
 		t.Fatal(err)
 	}
-	jobID := createdJob.ID
-	if jobID == "" {
+	if createdJob.ID == "" {
 		t.Fatal("expected non-empty job ID")
 	}
 
-	// 2. GET /api/v1/pipelines (List)
 	listReq := httptest.NewRequest(http.MethodGet, "/api/v1/pipelines", nil)
 	listRec := httptest.NewRecorder()
 	srv.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK {
 		t.Fatalf("list status %d", listRec.Code)
 	}
-	var jobs []domain.Job
+
+	var jobs []models.Job
 	if err := json.Unmarshal(listRec.Body.Bytes(), &jobs); err != nil {
 		t.Fatal(err)
 	}
-	if len(jobs) != 1 || jobs[0].ID != jobID {
-		t.Fatalf("expected 1 job with id %s, got %d jobs", jobID, len(jobs))
+	if len(jobs) != 1 || jobs[0].ID != createdJob.ID {
+		t.Fatalf("expected 1 job with id %s, got %d jobs", createdJob.ID, len(jobs))
 	}
 
-	// Wait briefly for the job to complete processing
+	return createdJob.ID
+}
+
+func waitForJobCompletion(t *testing.T, store *storage.Store, jobID string) {
+	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		j, ok := store.GetJob(jobID)
-		if ok && (j.Status == domain.Completed || j.Status == domain.Failed) {
-			break
+		if ok && (j.Status == models.StatusCompleted || j.Status == models.StatusFailed) {
+			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	t.Fatalf("job %s did not complete within deadline", jobID)
+}
 
-	// 3. GET /api/v1/pipelines/:id (Get details)
+func testJobDetailsAndProgress(t *testing.T, srv http.Handler, jobID string) {
+	t.Helper()
 	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/pipelines/"+jobID, nil)
 	getRec := httptest.NewRecorder()
 	srv.ServeHTTP(getRec, getReq)
 	if getRec.Code != http.StatusOK {
 		t.Fatalf("get status %d: %s", getRec.Code, getRec.Body.String())
 	}
-	var fetchedJob domain.Job
+
+	var fetchedJob models.Job
 	if err := json.Unmarshal(getRec.Body.Bytes(), &fetchedJob); err != nil {
 		t.Fatal(err)
 	}
-	if fetchedJob.Status != domain.Completed {
+	if fetchedJob.Status != models.StatusCompleted {
 		t.Fatalf("expected job status COMPLETED, got %s", fetchedJob.Status)
 	}
 
-	// 4. GET /api/v1/pipelines/:id/progress
 	progReq := httptest.NewRequest(http.MethodGet, "/api/v1/pipelines/"+jobID+"/progress", nil)
 	progRec := httptest.NewRecorder()
 	srv.ServeHTTP(progRec, progReq)
 	if progRec.Code != http.StatusOK {
 		t.Fatalf("progress status %d: %s", progRec.Code, progRec.Body.String())
 	}
-	var prog domain.Progress
+
+	var prog models.Progress
 	if err := json.Unmarshal(progRec.Body.Bytes(), &prog); err != nil {
 		t.Fatal(err)
 	}
-	if prog.Percent != 100 {
-		t.Fatalf("expected 100 percent complete, got %v", prog.Percent)
-	}
-	if prog.Processed != 1 || prog.Rejected != 1 || prog.ErrorCount != 1 {
+	if prog.Percent != 100 || prog.Processed != 1 || prog.Rejected != 1 || prog.ErrorCount != 1 {
 		t.Fatalf("unexpected progress counts: %+v", prog)
 	}
+}
 
-	// 5. GET /api/v1/pipelines/:id/results
+func testJobResultsAndErrors(t *testing.T, srv http.Handler, jobID string) {
+	t.Helper()
 	resReq := httptest.NewRequest(http.MethodGet, "/api/v1/pipelines/"+jobID+"/results", nil)
 	resRec := httptest.NewRecorder()
 	srv.ServeHTTP(resRec, resReq)
 	if resRec.Code != http.StatusOK {
 		t.Fatalf("results status %d: %s", resRec.Code, resRec.Body.String())
 	}
+
 	var resultsPayload map[string]any
 	if err := json.Unmarshal(resRec.Body.Bytes(), &resultsPayload); err != nil {
 		t.Fatal(err)
@@ -214,13 +229,13 @@ func TestPipelineLifecycleEndpoints(t *testing.T) {
 		t.Fatalf("expected 1 record in results, got %v", resultsPayload["records"])
 	}
 
-	// 6. GET /api/v1/pipelines/:id/errors
 	errReq := httptest.NewRequest(http.MethodGet, "/api/v1/pipelines/"+jobID+"/errors", nil)
 	errRec := httptest.NewRecorder()
 	srv.ServeHTTP(errRec, errReq)
 	if errRec.Code != http.StatusOK {
 		t.Fatalf("errors status %d: %s", errRec.Code, errRec.Body.String())
 	}
+
 	var errPayload map[string]any
 	if err := json.Unmarshal(errRec.Body.Bytes(), &errPayload); err != nil {
 		t.Fatal(err)
@@ -229,8 +244,10 @@ func TestPipelineLifecycleEndpoints(t *testing.T) {
 	if !ok || len(errList) != 1 {
 		t.Fatalf("expected 1 error in payload, got %v", errPayload["errors"])
 	}
+}
 
-	// 7. PATCH /api/v1/pipelines/:id/cancel on finished job returns 409
+func testJobCancelAndDeletion(t *testing.T, srv http.Handler, jobID string) {
+	t.Helper()
 	cancelReq := httptest.NewRequest(http.MethodPatch, "/api/v1/pipelines/"+jobID+"/cancel", nil)
 	cancelRec := httptest.NewRecorder()
 	srv.ServeHTTP(cancelRec, cancelReq)
@@ -238,7 +255,6 @@ func TestPipelineLifecycleEndpoints(t *testing.T) {
 		t.Fatalf("expected 409 for cancelling non-running job, got %d", cancelRec.Code)
 	}
 
-	// 8. DELETE /api/v1/pipelines/:id
 	delReq := httptest.NewRequest(http.MethodDelete, "/api/v1/pipelines/"+jobID, nil)
 	delRec := httptest.NewRecorder()
 	srv.ServeHTTP(delRec, delReq)
@@ -246,7 +262,6 @@ func TestPipelineLifecycleEndpoints(t *testing.T) {
 		t.Fatalf("delete status %d: %s", delRec.Code, delRec.Body.String())
 	}
 
-	// Verify job is gone
 	getAfterDel := httptest.NewRequest(http.MethodGet, "/api/v1/pipelines/"+jobID, nil)
 	getAfterDelRec := httptest.NewRecorder()
 	srv.ServeHTTP(getAfterDelRec, getAfterDel)
@@ -267,7 +282,7 @@ func TestAPIValidationErrors(t *testing.T) {
 	}
 
 	// Empty sources
-	cfgEmptySources := domain.Config{Exports: []domain.ExportTarget{{Type: "json"}}}
+	cfgEmptySources := models.Config{Exports: []models.ExportTarget{{Type: "json"}}}
 	b, _ := json.Marshal(cfgEmptySources)
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/pipelines", bytes.NewReader(b))
 	rec = httptest.NewRecorder()
@@ -277,7 +292,7 @@ func TestAPIValidationErrors(t *testing.T) {
 	}
 
 	// Empty exports
-	cfgEmptyExports := domain.Config{Sources: []domain.Source{{Type: "csv", Path: "in.csv"}}}
+	cfgEmptyExports := models.Config{Sources: []models.Source{{Type: "csv", Path: "in.csv"}}}
 	b, _ = json.Marshal(cfgEmptyExports)
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/pipelines", bytes.NewReader(b))
 	rec = httptest.NewRecorder()

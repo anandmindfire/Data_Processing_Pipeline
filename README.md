@@ -34,7 +34,8 @@ A robust, production-oriented, concurrent data processing engine and job managem
   - [Cooperative Cancellation Hierarchy](#cooperative-cancellation-hierarchy)
   - [Transient HTTP Retries with Exponential Backoff](#transient-http-retries-with-exponential-backoff)
 - [Testing & Quality Assurance](#testing--quality-assurance)
-- [Git Quality Automation & CI/CD](#git-quality-automation--cicd)
+- [Continuous Integration (CI/CD)](#continuous-integration-cicd)
+- [Contributing & Community](#contributing--community)
 - [Documentation Index](#documentation-index)
 
 ---
@@ -106,105 +107,139 @@ flowchart LR
 ## Project Layout (Clean Architecture)
 
 ```
-data-processing-pipeline/
+pipeline-system/
 ├── cmd/
 │   └── server/
-│       └── main.go                  # Composition root, dependency injection & OS signal shutdown
-├── internal/
-│   ├── aggregation/
-│   │   ├── aggregator.go            # Group-by count, sum, average, min, max engine
-│   │   ├── aggregator_test.go       # Aggregation unit tests
-│   │   ├── errors.go                # Aggregation domain errors
-│   │   └── types.go                 # Aggregator interfaces and state types
-│   ├── api/
-│   │   ├── middleware/
-│   │   │   ├── logging.go           # Structured HTTP request logger (`log/slog`)
-│   │   │   ├── middleware_test.go   # Middleware unit tests
-│   │   │   ├── ratelimit.go         # Token-bucket rate limiter per client IP
-│   │   │   └── recovery.go          # HTTP panic recovery middleware
-│   │   ├── docs.go                  # Embedded Swagger UI handler & OpenAPI spec server
-│   │   ├── handler.go               # HTTP handlers for all 8 REST endpoints
-│   │   ├── openapi.json             # Embedded OpenAPI 3.0.3 specification
-│   │   ├── response.go              # Standard JSON response and error envelopes
-│   │   ├── routes.go                # Route multiplexer and middleware decorators (chi v5)
-│   │   ├── server.go                # Server lifecycle and configuration
-│   │   ├── server_test.go           # REST API endpoint unit & mock tests
-│   │   └── validation.go            # Upfront job request specification validator
-│   ├── config/
-│   │   ├── config.go                # Strongly-typed configuration with environment overrides
-│   │   └── config_test.go           # Configuration tests
-│   ├── export/
-│   │   ├── csv.go                   # RFC 4180 CSV writer with deterministic union headers
-│   │   ├── errors.go                # Export domain errors
-│   │   ├── exporter.go              # Exporter dispatcher and target coordinator
-│   │   ├── exporter_test.go         # Exporter unit tests
-│   │   ├── json.go                  # Formatted JSON record writer
-│   │   └── sqlite.go                # Transactional SQLite DDL & batch INSERT generator
-│   ├── ingestion/
-│   │   ├── csv.go                   # Streaming CSV reader
-│   │   ├── errors.go                # Ingestion domain errors
-│   │   ├── http.go                  # HTTP client with 3x exponential backoff retry
-│   │   ├── json.go                  # Streaming JSON reader (arrays and objects)
-│   │   ├── reader.go                # Unified multi-source stream dispatcher
-│   │   ├── reader_test.go           # Ingestion unit and mock tests
-│   │   └── types.go                 # Ingested item definition
-│   ├── jobs/
-│   │   ├── errors.go                # Domain error definitions (capacity, not found, conflicts)
-│   │   ├── manager.go               # Job manager, active quotas, and async orchestration
-│   │   ├── manager_test.go          # Job manager unit tests
-│   │   └── service.go               # Progress, error querying, results, and cancellation logic
-│   ├── metrics/
-│   │   ├── collector.go             # Telemetry collector (counters, latencies, rates)
-│   │   ├── metrics_test.go          # Metrics unit tests
-│   │   └── prometheus.go            # Prometheus text format serializer
-│   ├── models/
-│   │   ├── config.go                # Config, Source, Rule, Aggregation, ExportTarget models
-│   │   ├── job.go                   # Job struct and state models
-│   │   ├── metrics.go               # Observability and Progress tracking models
-│   │   ├── record.go                # Record map and RecordError definitions
-│   │   └── status.go                # Job status constants (PENDING, RUNNING, COMPLETED, etc.)
-│   ├── pipeline/
-│   │   ├── engine.go                # Direct pipeline coordinator
-│   │   ├── engine_test.go           # Pipeline engine tests
-│   │   ├── orchestrator.go          # Full multi-stage channel mesh execution loop
-│   │   ├── pipeline.go              # Pipeline struct constructor and interfaces
-│   │   ├── pipeline_test.go         # Direct pipeline execution tests
-│   │   └── worker.go                # Validation and transformation worker pools
-│   └── storage/
-│       ├── errors.go                # Storage domain errors
-│       ├── file.go                  # Atomic JSON file repository (crash-safe snapshot storage)
-│       ├── memory.go                # Thread-safe in-memory repository (testing)
-│       ├── repository.go            # Storage interface definition
-│       ├── storage_test.go          # Storage persistence tests
-│       └── store.go                 # Backward-compatibility storage adapter
-├── test/
-│   └── pipeline_integration_test.go # End-to-end integration tests (CSV + JSON + HTTP)
+│       └── main.go                 # Application entry point & graceful shutdown
+│
 ├── configs/
-│   └── default.json                 # Sample server configuration
-├── docs/
-│   ├── design-report.md             # <= 1-page design report (architecture & concurrency model)
-│   ├── openapi.json                 # Standalone OpenAPI 3.0.3 specification
-│   └── production-readiness.md      # Detailed comparison: code quality vs. cloud production readiness
-├── samples/
-│   ├── input.csv                    # Sample CSV input file
-│   ├── input.json                   # Sample JSON input file
-│   ├── job.json                     # Complete sample pipeline job specification
-│   ├── mixed_job.json               # Sample mixed job (CSV file + JSON file + HTTP REST API)
-│   └── responses/                   # Example API JSON responses
-├── .github/                         # GitHub repository configuration
-│   ├── workflows/
-│   │   └── ci.yml                   # GitHub Actions CI (gofmt, vet, race tests, Docker build)
-│   └── pull_request_template.md     # Standardized Pull Request template
-├── .githooks/                       # Native git hooks (pre-commit, commit-msg)
-│   ├── commit-msg                   # Conventional Commits format validator
-│   └── pre-commit                   # Formatter (gofmt/gofumpt), vet, and race tests runner
-├── .golangci.yml                    # golangci-lint linter configuration (ESLint equivalent)
-├── .lefthook.yml                    # Lefthook git hook configuration (Husky equivalent)
-├── Dockerfile                       # Multi-stage distroless container build
-├── docker-compose.yml               # Container orchestration with volumes & healthchecks
-├── Makefile                         # Automation targets for build, test, race, vet, and run
-├── go.mod                           # Go module definition
-└── go.sum                           # Checksums for external dependencies
+│   ├── config.go                   # Config struct & validation
+│   ├── env.go                      # Environment loader (.env & OS env)
+│   ├── default.go                  # Default runtime values
+│   └── default.json                # Sample JSON configuration
+│
+├── internal/
+│   ├── api/
+│   │   ├── controllers/
+│   │   │   └── pipeline_controller.go # REST handlers (CRUD, progress, cancel, metrics)
+│   │   ├── routes/
+│   │   │   └── routes.go           # Route definitions & URL dispatching
+│   │   ├── middleware/
+│   │   │   ├── logger.go           # Structured HTTP logger (slog)
+│   │   │   ├── recovery.go         # Panic recovery middleware
+│   │   │   ├── request_id.go       # Unique request tracing (X-Request-ID)
+│   │   │   ├── cors.go             # Cross-Origin Resource Sharing
+│   │   │   ├── timeout.go          # Request deadline management
+│   │   │   └── ratelimit.go        # Per-IP token-bucket rate limiter
+│   │   ├── dto/
+│   │   │   ├── request/
+│   │   │   │   ├── create_pipeline_request.go
+│   │   │   │   └── cancel_pipeline_request.go
+│   │   │   └── response/
+│   │   │       ├── pipeline_response.go
+│   │   │       ├── progress_response.go
+│   │   │       ├── error_response.go
+│   │   │       └── common_response.go
+│   │   └── validator/
+│   │       └── request_validator.go # Request body & specification validator
+│   │
+│   ├── services/
+│   │   ├── pipeline_service.go     # Application service orchestrator
+│   │   ├── job_service.go          # Job lifecycle & concurrency control
+│   │   ├── metrics_service.go      # Telemetry & progress calculations
+│   │   └── export_service.go       # Dataset export & artifact cleanup
+│   │
+│   ├── repositories/
+│   │   ├── job_repository.go       # Job persistence interface
+│   │   ├── error_repository.go     # Error logging interface
+│   │   ├── metrics_repository.go   # Observability metrics interface
+│   │   └── sqlite/
+│   │       └── sqlite_repository.go # SQLite / SQL implementation
+│   │
+│   ├── pipeline/
+│   │   ├── engine.go               # Pipeline orchestrator & executor
+│   │   ├── worker_pool.go          # Concurrent worker pool implementation
+│   │   ├── channels.go             # Bounded channel mesh topology
+│   │   ├── context.go              # Timeout & cancellation context
+│   │   ├── coordinator.go          # Stage-to-stage orchestration
+│   │   ├── progress_tracker.go     # Real-time progress tracking
+│   │   ├── error_collector.go      # Centralized error & dead-letter handler
+│   │   └── metrics.go              # Stage latencies & throughput metrics
+│   │
+│   ├── ingestion/
+│   │   ├── reader.go               # Reader interface & orchestrator
+│   │   ├── csv_reader.go           # Streaming CSV reader
+│   │   ├── json_reader.go          # Streaming JSON & NDJSON reader
+│   │   ├── api_reader.go           # Remote HTTP/API reader with retries
+│   │   └── factory.go              # Stream parser factory
+│   │
+│   ├── validation/
+│   │   ├── validator.go            # Validator interface & coordination
+│   │   ├── schema_validator.go     # Type checking & required fields
+│   │   └── business_validator.go   # Min/max thresholds & regex validation
+│   │
+│   ├── transformation/
+│   │   ├── transformer.go          # Transformer interface & engine
+│   │   ├── normalize.go            # String casing & trimming
+│   │   ├── enrichment.go           # Math scaling & fallback injection
+│   │   └── mapping.go              # Field mapping & record cloning
+│   │
+│   ├── aggregation/
+│   │   ├── aggregator.go           # Streaming aggregation engine
+│   │   ├── statistics.go           # Count, sum, average, min, max stats
+│   │   ├── groupby.go              # Group-by key resolution
+│   │   └── summary.go              # Aggregation finalization & formatting
+│   │
+│   ├── export/
+│   │   ├── exporter.go             # Multi-sink export coordinator
+│   │   ├── csv_exporter.go         # RFC 4180 CSV serializer
+│   │   ├── json_exporter.go        # Formatted JSON serializer
+│   │   ├── sqlite_exporter.go      # Transactional SQLite DDL & INSERTs
+│   │   └── factory.go              # Exporter target factory
+│   │
+│   ├── models/
+│   │   ├── job.go                  # Job entity & lifecycle states
+│   │   ├── record.go               # Record map dictionary
+│   │   ├── error.go                # RecordError domain model
+│   │   ├── metrics.go              # Metrics & Progress telemetry
+│   │   ├── aggregation.go          # Aggregation specifications
+│   │   └── pipeline.go             # Pipeline configuration, Source, Rule
+│   │
+│   ├── database/
+│   │   ├── connection.go           # SQL pool & connection manager
+│   │   ├── migration.go            # Schema migrations (jobs, errors)
+│   │   └── sqlite.go               # SQLite pragmas (WAL) & path helpers
+│   │
+│   └── bootstrap/
+│       ├── app.go                  # Application runtime lifecycle
+│       ├── dependency.go           # Dependency injection container
+│       └── router.go               # HTTP router & middleware chain
+│
+├── pkg/
+│   ├── logger/                     # Global slog logger initialization
+│   ├── errors/                     # Standardized error codes & sentinels
+│   ├── response/                   # Reusable HTTP JSON response helpers
+│   ├── utils/                      # File, pointer, json, csv, time utils
+│   ├── constants/                  # Status, headers, stage constants
+│   ├── enums/                      # SourceType, ExportType, JobStatus enums
+│   ├── interfaces/                 # Core engine contract interfaces
+│   └── types/                      # Common types & pagination helpers
+│
+├── test/
+│   ├── integration/                # End-to-end integration tests
+│   ├── unit/                       # Component unit tests
+│   ├── mocks/                      # Test mocks and stubs
+│   └── testdata/                   # Sample datasets (CSV, JSON)
+│
+├── docs/                           # Architecture reports & OpenAPI spec
+├── samples/                        # Pipeline execution examples
+├── scripts/                        # Load testing and benchmark scripts
+├── .env.example                    # Environment template
+├── Makefile                        # Build, test, and verification tasks
+├── Dockerfile                      # Distroless container image
+├── docker-compose.yml              # Multi-container local stack
+├── go.mod                          # Go module dependencies
+└── README.md                       # Comprehensive system documentation
 ```
 
 ---
@@ -450,31 +485,22 @@ make check
 
 ---
 
-## Git Quality Automation & CI/CD
+## Continuous Integration (CI/CD)
 
-### Native Git Hooks Setup
-This repository includes a native Go git tooling setup (the Go equivalent of Husky, Prettier, ESLint, and commitlint):
-
-| Standard Tooling | Go Equivalent in this Repo | Configuration File |
-| :--- | :--- | :--- |
-| **Husky** | Native Git Hooks / **`lefthook`** | `.githooks/` & `.lefthook.yml` |
-| **Prettier** | **`gofmt`** / **`gofumpt`** | Executed in pre-commit hook & `make fmt` |
-| **ESLint** | **`golangci-lint`** / `go vet` | `.golangci.yml` & `make lint` |
-| **commitlint** | Conventional Commits hook | `.githooks/commit-msg` |
-
-To activate automated commit checks locally:
-```bash
-make hooks
-```
-
-### Continuous Integration (GitHub Actions)
-Automated CI executes on every push and pull request via [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+Automated continuous integration runs on every push and pull request via [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
 1. **Formatting & Static Analysis:** Checks `gofmt` compliance and executes `go vet` and `golangci-lint`.
-2. **Race Condition Tests:** Runs `go test -race -v -covermode=atomic ./...` across all 15 packages.
+2. **Race Condition Tests:** Runs `go test -race -v -covermode=atomic ./...` across all packages with zero data races.
 3. **Binary & Container Build Verification:** Compiles `bin/pipeline-server` and builds the multi-stage distroless Docker image.
 
-### Pull Request Template
-A standardized Pull Request template is configured at [`.github/pull_request_template.md`](.github/pull_request_template.md) covering change classification, pipeline component checklist, verification steps, and breaking change disclosures.
+---
+
+## Contributing & Community
+
+We welcome contributions to the Data Processing Pipeline! Please review our community guides:
+- **[Contributing Guide](CONTRIBUTING.md):** Complete developer workflow, coding standards, branching strategy, testing guidelines, and PR checklist.
+- **[Code of Conduct](CODE_OF_CONDUCT.md):** Contributor Covenant v2.1 community behavior standards.
+- **[Pull Request Template](.github/pull_request_template.md):** Standardized pull request submission template.
+- **[Issue Templates](.github/ISSUE_TEMPLATE/):** Bug reports and feature request templates.
 
 ---
 
@@ -483,3 +509,5 @@ A standardized Pull Request template is configured at [`.github/pull_request_tem
 - **[Design Report (<= 1 Page)](docs/design-report.md):** Executive report summarizing design choices, the concurrency model, channel lifecycle ownership, and engineering trade-offs.
 - **[Production Readiness Analysis](docs/production-readiness.md):** In-depth engineering blueprint contrasting current codebase achievements with enterprise cloud requirements (PostgreSQL migrations, S3/GCS object storage, durable queues, OpenTelemetry, and container hardening).
 - **[OpenAPI 3.0.3 Specification](docs/openapi.json):** Full OpenAPI specification describing all REST endpoints, parameters, schemas, and responses.
+- **[Contributing Guidelines](CONTRIBUTING.md):** Developer setup, engineering standards, and PR process.
+- **[Code of Conduct](CODE_OF_CONDUCT.md):** Community engagement standards.

@@ -19,7 +19,7 @@ services:
       - ./exports:/app/exports
       - ./samples:/app/samples:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz || exit 1"]
+      test: ["CMD", "/pipeline-server", "--healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 3
@@ -36,7 +36,7 @@ services:
       POSTGRES_PASSWORD: pipeline_password
       POSTGRES_DB: pipeline_db
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:

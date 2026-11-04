@@ -5,11 +5,13 @@ on:
     branches:
       - main
       - master
+      - Dev
       - production_readiness_check
   pull_request:
     branches:
       - main
       - master
+      - Dev
 
 permissions:
   contents: read

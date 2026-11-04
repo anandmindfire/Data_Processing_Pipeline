@@ -1,4 +1,4 @@
-.PHONY: all build run test race vet fmt lint hooks check clean docker-build docker-up docker-down
+.PHONY: all build run test race vet fmt lint hooks check clean docker-build docker-up docker-down load-test
 
 BINARY_NAME=pipeline-server
 MAIN_PACKAGE=./cmd/server
@@ -65,3 +65,7 @@ docker-up:
 docker-down:
 	@echo "==> Stopping Docker containers..."
 	docker compose down
+
+load-test:
+	@echo "==> Running load test against pipeline server..."
+	./scripts/load_test.sh

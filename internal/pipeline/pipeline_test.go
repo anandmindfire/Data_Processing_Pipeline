@@ -61,8 +61,8 @@ func TestPipelineDirectExecution(t *testing.T) {
 	if job.Metrics.Processed != 2 {
 		t.Fatalf("expected 2 processed records, got %d", job.Metrics.Processed)
 	}
-	sums := job.Aggregates["dept_sum"].(map[string]float64)
-	if sums["Eng"] != 300.0 {
-		t.Fatalf("expected Eng sum 300, got %v", sums["Eng"])
+	sums, ok := job.Aggregates["dept_sum"].(map[string]float64)
+	if !ok || sums["Eng"] != 300.0 {
+		t.Fatalf("expected Eng sum 300, got %v", job.Aggregates["dept_sum"])
 	}
 }

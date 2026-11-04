@@ -1,0 +1,9 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Interactive Swagger UI API Documentation
+    url: http://localhost:8080/docs
+    about: Explore the OpenAPI 3.0 interactive documentation and live sandbox.
+  - name: Architecture & Design Guide
+    url: https://github.com/anandmindfire/Data_Processing_Pipeline#system-architecture
+    about: Read the end-to-end architectural data flow, stage sequence, and benchmark comparisons.
+

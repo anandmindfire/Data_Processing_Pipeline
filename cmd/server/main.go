@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -10,81 +10,48 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/anandmindfire/data-processing-pipeline/internal/api"
-	"github.com/anandmindfire/data-processing-pipeline/internal/config"
-	"github.com/anandmindfire/data-processing-pipeline/internal/export"
-	"github.com/anandmindfire/data-processing-pipeline/internal/ingestion"
-	"github.com/anandmindfire/data-processing-pipeline/internal/jobs"
-	"github.com/anandmindfire/data-processing-pipeline/internal/metrics"
-	"github.com/anandmindfire/data-processing-pipeline/internal/pipeline"
-	"github.com/anandmindfire/data-processing-pipeline/internal/storage"
-	"github.com/anandmindfire/data-processing-pipeline/internal/transformation"
-	"github.com/anandmindfire/data-processing-pipeline/internal/validation"
+	"github.com/anandmindfire/data-processing-pipeline/internal/bootstrap"
 )
 
+func runHealthCheck() {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%s/healthz", port))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		os.Exit(1)
+	}
+	os.Exit(0)
+}
+
 func main() {
-	cfg := config.Load()
-	cfg.InitLogger()
-	if err := cfg.Validate(); err != nil {
-		slog.Error("invalid configuration", "error", err)
-		os.Exit(1)
+	if len(os.Args) > 1 && (os.Args[1] == "--healthcheck" || os.Args[1] == "-healthcheck") {
+		runHealthCheck()
+		return
 	}
 
-	store, err := storage.NewFileRepository(cfg.DataDir)
+	app, err := bootstrap.NewApp()
 	if err != nil {
-		slog.Error("initialize storage", "error", err, "dir", cfg.DataDir)
+		slog.Error("bootstrap failed", "error", err)
 		os.Exit(1)
 	}
-	defer func() {
-		_ = store.Close()
-	}()
 
-	client := &http.Client{Timeout: 30 * time.Second}
-	pipe := pipeline.NewPipeline(
-		ingestion.NewReader(client),
-		validation.NewValidator(),
-		transformation.NewTransformer(),
-		export.NewExporter(cfg.ExportDir),
-		store,
-		metrics.GlobalCollector,
-	)
-	mgr := jobs.NewManager(cfg, store, pipe)
-	handler := api.NewServer(cfg, mgr)
+	app.Start()
 
-	server := &http.Server{
-		Addr:              cfg.ServerAddr,
-		Handler:           handler,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       cfg.ReadTimeout,
-		WriteTimeout:      cfg.WriteTimeout,
-		IdleTimeout:       cfg.IdleTimeout,
-	}
-
-	go func() {
-		slog.Info("server listening",
-			"addr", cfg.ServerAddr,
-			"data_dir", cfg.DataDir,
-			"export_dir", cfg.ExportDir,
-			"max_active_jobs", cfg.MaxActiveJobs,
-		)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("server failed", "error", err)
-			os.Exit(1)
-		}
-	}()
-
-	// Graceful shutdown on OS interrupt
+	// Wait for OS shutdown signals
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigChan
 
-	slog.Info("shutting down server...", "signal", sig.String())
+	slog.Info("received signal, initiating graceful shutdown", "signal", sig.String())
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := server.Shutdown(shutdownCtx); err != nil {
+	if err := app.Stop(shutdownCtx); err != nil {
 		slog.Error("graceful shutdown failed", "error", err)
-	} else {
-		slog.Info("server stopped gracefully")
+		os.Exit(1)
 	}
+	slog.Info("server stopped gracefully")
 }

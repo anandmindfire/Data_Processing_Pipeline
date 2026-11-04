@@ -1,7 +1,6 @@
 package aggregation
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
@@ -39,60 +38,19 @@ func NewAggregator(definitions []models.Aggregation) *MetricsAggregator {
 func (a *MetricsAggregator) Process(r models.Record) {
 	for _, def := range a.definitions {
 		key := BuildAggKey(def)
-		group := "_all"
-		if def.GroupBy != "" {
-			if grpVal, ok := r[def.GroupBy]; ok && grpVal != nil {
-				group = fmt.Sprint(grpVal)
-			} else {
-				group = "unknown"
-			}
-		}
+		group := resolveGroup(r, def.GroupBy)
 
 		v, isNum := validation.ParseNumber(r[def.Field])
 		if !isNum && !strings.EqualFold(def.Operation, "count") {
 			continue
 		}
 
-		a.applyOperation(key, group, def.Operation, v)
+		applyOperation(a.aggregates, key, group, def.Operation, v)
 		a.counts[key+"|"+group]++
-	}
-}
-
-func (a *MetricsAggregator) applyOperation(key, group, op string, v float64) {
-	switch strings.ToLower(op) {
-	case "count":
-		a.aggregates[key][group]++
-	case "sum", "avg", "average":
-		a.aggregates[key][group] += v
-	case "min":
-		curr, exists := a.aggregates[key][group]
-		if !exists || v < curr {
-			a.aggregates[key][group] = v
-		}
-	case "max":
-		curr, exists := a.aggregates[key][group]
-		if !exists || v > curr {
-			a.aggregates[key][group] = v
-		}
 	}
 }
 
 // Finalize calculates final summary metrics (averages) and returns results map.
 func (a *MetricsAggregator) Finalize() map[string]any {
-	results := make(map[string]any, len(a.aggregates))
-	for _, def := range a.definitions {
-		key := BuildAggKey(def)
-		groupMap := make(map[string]float64, len(a.aggregates[key]))
-		for group, val := range a.aggregates[key] {
-			if strings.EqualFold(def.Operation, "avg") || strings.EqualFold(def.Operation, "average") {
-				count := a.counts[key+"|"+group]
-				if count > 0 {
-					val = val / float64(count)
-				}
-			}
-			groupMap[group] = val
-		}
-		results[key] = groupMap
-	}
-	return results
+	return buildFinalSummary(a.definitions, a.aggregates, a.counts)
 }

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anandmindfire/data-processing-pipeline/internal/domain"
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 func TestStorePersistenceAndRetrieval(t *testing.T) {
@@ -17,27 +17,27 @@ func TestStorePersistenceAndRetrieval(t *testing.T) {
 
 	jobID := "job-123"
 	now := time.Now().Truncate(time.Millisecond)
-	j := &domain.Job{
+	j := &models.Job{
 		ID:        jobID,
-		Status:    domain.Pending,
+		Status:    models.StatusPending,
 		CreatedAt: now,
 		UpdatedAt: now,
-		Config: domain.Config{
-			Sources: []domain.Source{{Type: "csv", Name: "test", Path: "test.csv"}},
-			Exports: []domain.ExportTarget{{Type: "json", Path: "out.json"}},
+		Config: models.Config{
+			Sources: []models.Source{{Type: "csv", Name: "test", Path: "test.csv"}},
+			Exports: []models.ExportTarget{{Type: "json", Path: "out.json"}},
 		},
-		Metrics: domain.Metrics{Discovered: 10, Processed: 5},
+		Metrics: models.Metrics{Discovered: 10, Processed: 5},
 	}
 
 	if err := s1.PutJob(j); err != nil {
 		t.Fatalf("PutJob failed: %v", err)
 	}
 
-	if err := s1.AddRecord(jobID, domain.Record{"id": "1", "val": 42}); err != nil {
+	if err := s1.AddRecord(jobID, models.Record{"id": "1", "val": 42}); err != nil {
 		t.Fatalf("AddRecord failed: %v", err)
 	}
 
-	recordErr := domain.RecordError{
+	recordErr := models.RecordError{
 		Source:  "test",
 		Index:   1,
 		Stage:   "validation",
@@ -48,51 +48,62 @@ func TestStorePersistenceAndRetrieval(t *testing.T) {
 		t.Fatalf("AddError failed: %v", err)
 	}
 
-	// Verify in-memory state
-	gotJob, ok := s1.GetJob(jobID)
-	if !ok || gotJob.ID != jobID {
-		t.Fatalf("expected job %s, got %#v", jobID, gotJob)
-	}
-	records := s1.Records(jobID)
-	if len(records) != 1 || records[0]["id"] != "1" {
-		t.Fatalf("unexpected records: %#v", records)
-	}
-	errs := s1.Errors(jobID)
-	if len(errs) != 1 || errs[0].Message != "field missing" {
-		t.Fatalf("unexpected errors: %#v", errs)
-	}
-	jobs := s1.ListJobs()
-	if len(jobs) != 1 {
-		t.Fatalf("expected 1 job, got %d", len(jobs))
-	}
+	assertInMemoryStoreState(t, s1, jobID)
 
 	// Reopen store from disk and check recovery
 	s2, err := New(dir)
 	if err != nil {
 		t.Fatalf("failed to reopen store: %v", err)
 	}
-	recoveredJob, ok := s2.GetJob(jobID)
+	assertRecoveredStoreState(t, s2, jobID)
+	assertStoreDeletion(t, s2, jobID)
+}
+
+func assertInMemoryStoreState(t *testing.T, s *Store, jobID string) {
+	t.Helper()
+	gotJob, ok := s.GetJob(jobID)
+	if !ok || gotJob.ID != jobID {
+		t.Fatalf("expected job %s, got %#v", jobID, gotJob)
+	}
+	records := s.Records(jobID)
+	if len(records) != 1 || records[0]["id"] != "1" {
+		t.Fatalf("unexpected records: %#v", records)
+	}
+	errs := s.Errors(jobID)
+	if len(errs) != 1 || errs[0].Message != "field missing" {
+		t.Fatalf("unexpected errors: %#v", errs)
+	}
+	if len(s.ListJobs()) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(s.ListJobs()))
+	}
+}
+
+func assertRecoveredStoreState(t *testing.T, s *Store, jobID string) {
+	t.Helper()
+	recoveredJob, ok := s.GetJob(jobID)
 	if !ok || recoveredJob.ID != jobID {
 		t.Fatalf("expected recovered job %s, got %#v", jobID, recoveredJob)
 	}
-	if len(s2.Records(jobID)) != 1 {
-		t.Fatalf("expected 1 recovered record, got %d", len(s2.Records(jobID)))
+	if len(s.Records(jobID)) != 1 {
+		t.Fatalf("expected 1 recovered record, got %d", len(s.Records(jobID)))
 	}
-	if len(s2.Errors(jobID)) != 1 {
-		t.Fatalf("expected 1 recovered error, got %d", len(s2.Errors(jobID)))
+	if len(s.Errors(jobID)) != 1 {
+		t.Fatalf("expected 1 recovered error, got %d", len(s.Errors(jobID)))
 	}
+}
 
-	// Test DeleteJob
-	if err := s2.DeleteJob(jobID); err != nil {
+func assertStoreDeletion(t *testing.T, s *Store, jobID string) {
+	t.Helper()
+	if err := s.DeleteJob(jobID); err != nil {
 		t.Fatalf("DeleteJob failed: %v", err)
 	}
-	if _, ok := s2.GetJob(jobID); ok {
+	if _, ok := s.GetJob(jobID); ok {
 		t.Fatal("expected job to be deleted")
 	}
-	if len(s2.Records(jobID)) != 0 {
+	if len(s.Records(jobID)) != 0 {
 		t.Fatal("expected records to be deleted with job")
 	}
-	if len(s2.Errors(jobID)) != 0 {
+	if len(s.Errors(jobID)) != 0 {
 		t.Fatal("expected errors to be deleted with job")
 	}
 }

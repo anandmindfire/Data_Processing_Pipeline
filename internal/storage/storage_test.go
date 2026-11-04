@@ -24,22 +24,34 @@ func testRepositoryContract(t *testing.T, repo Repository) {
 		},
 	}
 
-	// 1. Save and Get
+	t.Run("SaveAndGetJob", func(t *testing.T) { testSaveAndGetJob(t, ctx, repo, job) })
+	t.Run("ListJobs", func(t *testing.T) { testListJobs(t, ctx, repo) })
+	t.Run("Records", func(t *testing.T) { testSaveAndGetRecords(t, ctx, repo, jobID) })
+	t.Run("Errors", func(t *testing.T) { testAddAndGetErrors(t, ctx, repo, jobID, now) })
+	t.Run("DeleteJob", func(t *testing.T) { testDeleteJob(t, ctx, repo, jobID) })
+}
+
+func testSaveAndGetJob(t *testing.T, ctx context.Context, repo Repository, job *models.Job) {
+	t.Helper()
 	if err := repo.SaveJob(ctx, job); err != nil {
 		t.Fatalf("SaveJob failed: %v", err)
 	}
-	got, found, err := repo.GetJob(ctx, jobID)
-	if err != nil || !found || got.ID != jobID {
+	got, found, err := repo.GetJob(ctx, job.ID)
+	if err != nil || !found || got.ID != job.ID {
 		t.Fatalf("GetJob failed: found=%v, err=%v, got=%+v", found, err, got)
 	}
+}
 
-	// 2. List
+func testListJobs(t *testing.T, ctx context.Context, repo Repository) {
+	t.Helper()
 	jobs, err := repo.ListJobs(ctx)
 	if err != nil || len(jobs) != 1 {
 		t.Fatalf("ListJobs failed: count=%d, err=%v", len(jobs), err)
 	}
+}
 
-	// 3. Add & Get Record
+func testSaveAndGetRecords(t *testing.T, ctx context.Context, repo Repository, jobID string) {
+	t.Helper()
 	rec := models.Record{"name": "Alice", "score": 95.5}
 	if err := repo.SaveRecord(ctx, jobID, rec); err != nil {
 		t.Fatalf("SaveRecord failed: %v", err)
@@ -48,8 +60,10 @@ func testRepositoryContract(t *testing.T, repo Repository) {
 	if err != nil || len(records) != 1 || records[0]["name"] != "Alice" {
 		t.Fatalf("GetRecords failed: %+v, err=%v", records, err)
 	}
+}
 
-	// 4. Add & Get Error
+func testAddAndGetErrors(t *testing.T, ctx context.Context, repo Repository, jobID string, now time.Time) {
+	t.Helper()
 	recErr := models.RecordError{
 		Source:  "source-1",
 		Index:   1,
@@ -64,12 +78,14 @@ func testRepositoryContract(t *testing.T, repo Repository) {
 	if err != nil || len(errs) != 1 || errs[0].Message != "invalid record" {
 		t.Fatalf("GetErrors failed: %+v, err=%v", errs, err)
 	}
+}
 
-	// 5. Delete
+func testDeleteJob(t *testing.T, ctx context.Context, repo Repository, jobID string) {
+	t.Helper()
 	if err := repo.DeleteJob(ctx, jobID); err != nil {
 		t.Fatalf("DeleteJob failed: %v", err)
 	}
-	_, found, err = repo.GetJob(ctx, jobID)
+	_, found, err := repo.GetJob(ctx, jobID)
 	if err != nil || found {
 		t.Fatalf("expected job to be deleted: found=%v, err=%v", found, err)
 	}
