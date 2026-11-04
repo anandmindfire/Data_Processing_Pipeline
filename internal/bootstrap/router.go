@@ -24,8 +24,11 @@ func BuildRouter(deps *Dependencies) http.Handler {
 		r.Use(middleware.APIKeyAuth(deps.Config.APIKey))
 	}
 
-	if deps.Config.RateLimitRPS > 0 && deps.Config.RateLimitBurst > 0 {
+	if deps.Limiter != nil {
+		r.Use(deps.Limiter.Middleware)
+	} else if deps.Config != nil && deps.Config.RateLimitRPS > 0 && deps.Config.RateLimitBurst > 0 {
 		limiter := middleware.NewRateLimiter(deps.Config.RateLimitRPS, deps.Config.RateLimitBurst)
+		deps.Limiter = limiter
 		r.Use(limiter.Middleware)
 	}
 

@@ -20,6 +20,8 @@ type RateLimiter struct {
 	clients map[string]*clientBucket
 	rps     float64
 	burst   int
+	stop    chan struct{}
+	done    chan struct{}
 }
 
 // NewRateLimiter initializes a RateLimiter with rps and burst limits.
@@ -28,6 +30,8 @@ func NewRateLimiter(rps float64, burst int) *RateLimiter {
 		clients: make(map[string]*clientBucket),
 		rps:     rps,
 		burst:   burst,
+		stop:    make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 	// Background cleanup of stale IP entries
 	go rl.cleanupLoop()
@@ -35,18 +39,36 @@ func NewRateLimiter(rps float64, burst int) *RateLimiter {
 }
 
 func (rl *RateLimiter) cleanupLoop() {
+	defer close(rl.done)
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
-	for range ticker.C {
-		rl.mu.Lock()
-		cutoff := time.Now().Add(-10 * time.Minute)
-		for ip, b := range rl.clients {
-			if b.lastRefill.Before(cutoff) {
-				delete(rl.clients, ip)
+	for {
+		select {
+		case <-rl.stop:
+			return
+		case <-ticker.C:
+			rl.mu.Lock()
+			cutoff := time.Now().Add(-10 * time.Minute)
+			for ip, b := range rl.clients {
+				if b.lastRefill.Before(cutoff) {
+					delete(rl.clients, ip)
+				}
 			}
+			rl.mu.Unlock()
 		}
-		rl.mu.Unlock()
 	}
+}
+
+// Close gracefully stops the cleanup goroutine.
+func (rl *RateLimiter) Close() {
+	rl.mu.Lock()
+	select {
+	case <-rl.stop:
+	default:
+		close(rl.stop)
+	}
+	rl.mu.Unlock()
+	<-rl.done
 }
 
 func (rl *RateLimiter) allow(ip string) bool {

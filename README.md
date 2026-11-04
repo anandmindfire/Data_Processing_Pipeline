@@ -47,8 +47,12 @@ A robust, production-oriented, concurrent data processing engine and job managem
 - **Actor-Style Concurrency (Fan-Out / Fan-In):** Dedicated goroutines per ingestion source stream records in parallel; configurable worker pools parallelize CPU-bound validation and transformation; single-consumer goroutines handle aggregation, export, progress tracking, and error collection without mutex lock contention.
 - **Hierarchical Cooperative Cancellation:** Every pipeline job runs under a hierarchical `context.Context` with configurable timeouts. Cancellation via `PATCH /api/v1/pipelines/:id/cancel` propagates instantly to disk readers, HTTP requests, and worker pool loops.
 - **Centralized Error Quarantine:** Faulty or corrupted records are isolated with stage and field diagnostic metadata into a centralized error collection over `errorCh`. Valid records continue processing to completion.
-- **Dead-Letter Handling:** Configurable destination path (`dead_letter_path`) automatically persists quarantined invalid records and error traces to disk upon completion.
-- **Multi-Sink Export Engine:** Pluggable exporter generating indented JSON, RFC 4180 compliant CSV (with deterministic union headers), and transactional SQLite DDL & batch `INSERT` SQL scripts.
+- **Dead-Letter Handling:** Configurable destination path (`dlq_path`) persists quarantined invalid records and error traces to disk upon completion.
+- **Streaming Multi-Sink Export:** A dedicated export goroutine streams record batches to every target while the job runs: JSON, RFC 4180 CSV (deterministic union headers), a real **SQLite database** (`records` + `aggregations` tables, via `database/sql`), and a portable SQL dump. Files are written to `<path>.part` and atomically renamed only when the job completes, so cancelled or failed runs never publish partial output.
+- **Durable Job Store:** Job metadata, processed records, and record errors are persisted in an embedded SQLite database (`DATA_DIR/pipeline.db`, WAL mode, versioned migrations) with batched transactional writes.
+- **Live Progress:** The progress tracker persists a metrics snapshot every 500 ms while a job runs, so `GET /progress` reports real-time counts, throughput, and stage latencies.
+- **Secure by Default:** Local source paths are sandboxed to `INPUT_DIRS`, every export/DLQ path to `EXPORT_DIR` (symlink-aware); HTTP sources are SSRF-protected at dial time (private, loopback, link-local and metadata ranges blocked, redirects re-validated); per-job worker, buffer, batch, timeout, and source limits are enforced at submission.
+- **Lifecycle Safety:** `SIGTERM` stops intake, cancels running jobs (recorded as `CANCELLED: server shutting down`), and drains them before exit; jobs interrupted by a crash are marked `FAILED` on the next start.
 - **Reliability & Observability:** Structured logging with standard library `log/slog`, panic recovery middleware, IP-based token-bucket rate limiting, embedded Swagger UI (`/docs`), and Prometheus metrics exposition (`/metrics`).
 - **100% Race-Clean & Tested:** Comprehensive unit tests, HTTP mock servers, and end-to-end integration tests passing with zero data races (`go test -race -count=1 ./...`).
 
@@ -71,7 +75,8 @@ flowchart LR
         AGG -->|"resultCh"| EXP["5. Export Stage"]
     end
 
-    EXP -->|"Write Data"| SINKS[("Export Targets<br/>JSON / CSV / SQLite")]
+    EXP -->|"Stream batches"| SINKS[("Export Targets<br/>JSON / CSV / SQLite DB / SQL")]
+    EXP -->|"Batched writes"| STORE[("Job Store<br/>SQLite pipeline.db")]
     VAL -.->|"invalid records"| DLQ[("Errors &<br/>Dead-Letter File")]
     TRANS -.->|"errors"| DLQ
     PIPELINE -.->|"telemetry"| METRICS["Prometheus /metrics &<br/>Progress Telemetry"]
@@ -83,7 +88,8 @@ flowchart LR
 2. **Validation (Worker Pool):** Parallel workers validate records against schema and business rules (types, min/max, regex). Invalid rows are diverted to `errorCh` without stopping the pipeline.
 3. **Transformation (Worker Pool):** Parallel workers normalize strings, apply mathematical scaling, and set fallback default values.
 4. **Aggregation (Fan-In):** A single consumer accumulates group-by statistics (`count`, `sum`, `avg`, `min`, `max`), eliminating lock contention on the hot path.
-5. **Export (Multi-Sink):** Valid records and aggregations are exported to JSON, RFC 4180 CSV, or transactional SQLite DDL & batch `INSERT` scripts. Quarantined records can be written to a dead-letter file.
+5. **Export (Streaming, Multi-Sink):** A single export goroutine batches records (`batch_size`, default 500), persists each batch to the job store in one transaction, and streams it to every export target. Aggregations are written into the SQLite database / SQL dump, and as a `<name>.aggregations.json` sidecar for JSON/CSV exports. Quarantined records can be written to a dead-letter file (`dlq_path`).
+6. **Side channels:** `errorCh` feeds one error-collector goroutine (batched persistence); `progressCh` feeds one progress-tracker goroutine that owns the job metrics and persists live snapshots.
 
 ---
 
@@ -97,8 +103,8 @@ flowchart LR
 | **Logging** | **`log/slog`** | Standard library structured, contextual JSON/text logging. |
 | **Metrics & Telemetry** | **Prometheus** | Industry standard exposition format at `/metrics` (job counters, rate gauges, stage latency distributions). |
 | **Documentation** | **OpenAPI 3.0.3 & Swagger UI** | Zero-dependency embedded Swagger UI served at `/docs` with interactive API execution. |
-| **Persistence** | **Repository Pattern (`database/sql` Ready)** | Abstracted persistence via `storage.Repository` interface with atomic file and in-memory implementations. |
-| **Export Formats** | **JSON, CSV, SQLite SQL** | Indented JSON, RFC 4180 CSV, and transactional SQLite scripts (`CREATE TABLE` + batch `INSERT`). |
+| **Persistence** | **SQLite via `database/sql` (`modernc.org/sqlite`, pure Go)** | `storage.Repository` with an SQLite implementation (production) and an in-memory implementation (tests). No CGO, so the binary stays static. |
+| **Export Formats** | **JSON, CSV, SQLite DB, SQL dump** | Streamed JSON array, RFC 4180 CSV, SQLite database file (`records`, `aggregations`), and portable SQL dump. |
 | **Containerization** | **Docker & Distroless** | Multi-stage build yielding minimal, secure, non-root Debian 12 distroless container images. |
 | **CI / Automation** | **GitHub Actions** | Automated CI pipeline checking formatting, static analysis (`go vet`), race testing, and container builds. |
 
@@ -141,7 +147,8 @@ pipeline-system/
 │   │   │       ├── error_response.go
 │   │   │       └── common_response.go
 │   │   └── validator/
-│   │       └── request_validator.go # Request body & specification validator
+│   │       ├── request_validator.go # Spec, limits & enum validation
+│   │       └── paths.go            # Input/export path sandboxing
 │   │
 │   ├── services/
 │   │   ├── pipeline_service.go     # Application service orchestrator
@@ -149,12 +156,10 @@ pipeline-system/
 │   │   ├── metrics_service.go      # Telemetry & progress calculations
 │   │   └── export_service.go       # Dataset export & artifact cleanup
 │   │
-│   ├── repositories/
-│   │   ├── job_repository.go       # Job persistence interface
-│   │   ├── error_repository.go     # Error logging interface
-│   │   ├── metrics_repository.go   # Observability metrics interface
-│   │   └── sqlite/
-│   │       └── sqlite_repository.go # SQLite / SQL implementation
+│   ├── storage/
+│   │   ├── repository.go           # Repository contract (jobs, records, errors, paging)
+│   │   ├── sqlite.go               # SQLite job store (production)
+│   │   └── memory.go               # In-memory store (tests)
 │   │
 │   ├── pipeline/
 │   │   ├── engine.go               # Pipeline orchestrator & executor
@@ -171,6 +176,7 @@ pipeline-system/
 │   │   ├── csv_reader.go           # Streaming CSV reader
 │   │   ├── json_reader.go          # Streaming JSON & NDJSON reader
 │   │   ├── api_reader.go           # Remote HTTP/API reader with retries
+│   │   ├── ssrf.go                 # SSRF-safe HTTP client (dial-time IP checks)
 │   │   └── factory.go              # Stream parser factory
 │   │
 │   ├── validation/
@@ -191,11 +197,9 @@ pipeline-system/
 │   │   └── summary.go              # Aggregation finalization & formatting
 │   │
 │   ├── export/
-│   │   ├── exporter.go             # Multi-sink export coordinator
-│   │   ├── csv_exporter.go         # RFC 4180 CSV serializer
-│   │   ├── json_exporter.go        # Formatted JSON serializer
-│   │   ├── sqlite_exporter.go      # Transactional SQLite DDL & INSERTs
-│   │   └── factory.go              # Exporter target factory
+│   │   ├── exporter.go             # Streaming export session & atomic publish
+│   │   ├── file_sinks.go           # JSON, CSV & SQL-dump sinks
+│   │   └── sqlite_sink.go          # SQLite database sink
 │   │
 │   ├── models/
 │   │   ├── job.go                  # Job entity & lifecycle states
@@ -207,8 +211,8 @@ pipeline-system/
 │   │
 │   ├── database/
 │   │   ├── connection.go           # SQL pool & connection manager
-│   │   ├── migration.go            # Schema migrations (jobs, errors)
-│   │   └── sqlite.go               # SQLite pragmas (WAL) & path helpers
+│   │   ├── migration.go            # Versioned schema migrations
+│   │   └── sqlite.go               # SQLite driver, DSN pragmas (WAL, busy timeout)
 │   │
 │   └── bootstrap/
 │       ├── app.go                  # Application runtime lifecycle
@@ -271,8 +275,11 @@ Run the pipeline service in an isolated, multi-stage distroless container:
 # Build the container image
 make docker-build
 
-# Launch the container stack with Docker Compose
+# Launch the container stack with Docker Compose (host port: ${PORT:-8080})
 docker compose up -d
+
+# Put your own input files in ./inputs (mounted read-only at /app/inputs);
+# job specs reference them as "/app/inputs/<file>" or the bundled "samples/<file>".
 
 # View live application logs
 docker compose logs -f pipeline
@@ -289,20 +296,31 @@ The server implements 12-factor configuration loading default JSON configuration
 | :--- | :--- | :--- | :--- |
 | `PORT` / `SERVER_PORT` | string | `8080` | Port for the HTTP server to listen on |
 | `ADDR` / `SERVER_ADDR` | string | `:8080` | Host and port address string |
-| `API_BASE_URL` / `BASE_URL` | string | `http://localhost:8080` | Base URL used by clients, health probes, and API docs |
+| `API_BASE_URL` / `BASE_URL` | string | `http://localhost:8080` | Public base URL shown in the API docs |
+| `HEALTHCHECK_URL` | string | local listener | Override the URL probed by `--healthcheck` |
 | `API_BASE_PATH` / `API_PREFIX` | string | `/api/v1` | Routing prefix path for pipeline REST endpoints |
 | `API_KEY` | string | `""` | Optional secret token for Bearer/X-API-Key authentication |
-| `DATA_DIR` | string | `data` | Directory where persistent job state is saved |
-| `EXPORT_DIR` | string | `exports` | Directory for generated CSV/JSON/SQL output files |
+| `DATA_DIR` | string | `data` | Directory holding the SQLite job store (`pipeline.db`) |
+| `EXPORT_DIR` | string | `exports` | Export sandbox: every export and DLQ path must be inside it |
+| `INPUT_DIRS` | list | `samples` | Comma-separated directories local file sources may read from |
+| `ALLOW_PRIVATE_SOURCES` | bool | `false` | Allow HTTP sources on private/loopback networks (dev only) |
+| `MAX_WORKERS_PER_STAGE` | int | `64` | Upper bound for `validation_workers` / `transform_workers` |
+| `MAX_BUFFER_SIZE` / `MAX_BATCH_SIZE` | int | `10000` | Upper bounds for `buffer_size` / `batch_size` |
+| `MAX_JOB_TIMEOUT_SECONDS` | int | `3600` | Upper bound for `timeout_seconds` |
+| `MAX_SOURCES_PER_JOB` / `MAX_EXPORTS_PER_JOB` | int | `16` / `8` | Spec size limits |
+| `SHUTDOWN_TIMEOUT` | duration | `25s` | Time to cancel and drain running jobs on `SIGTERM` |
+| `READ_TIMEOUT` / `WRITE_TIMEOUT` / `IDLE_TIMEOUT` | duration | `15s` / `30s` / `60s` | HTTP server timeouts |
 | `MAX_ACTIVE_JOBS` | int | `10` | Maximum number of concurrent running jobs |
 | `RATE_LIMIT_RPS` | float | `50.0` | Token bucket refill rate per second per IP |
 | `RATE_LIMIT_BURST` | int | `100` | Maximum token bucket burst capacity per IP |
 | `DEFAULT_TIMEOUT_SECONDS` | int | `300` | Default job timeout (overridable per job) |
 | `LOG_LEVEL` | string | `info` | Logging verbosity (`debug`, `info`, `warn`, `error`) |
 | `LOG_FORMAT` | string | `text` | Structured log format (`json` or `text`) |
-| `VALIDATION_WORKERS` | int | `4` | Default worker pool size for validation stage |
-| `TRANSFORM_WORKERS` | int | `4` | Default worker pool size for transformation stage |
-| `BUFFER_SIZE` | int | `64` | Channel capacity for inter-stage buffers |
+| `DEFAULT_VALIDATION_WORKERS` | int | `4` | Validation pool size when a job does not set one |
+| `DEFAULT_TRANSFORM_WORKERS` | int | `4` | Transform pool size when a job does not set one |
+| `DEFAULT_BUFFER_SIZE` | int | `64` | Channel capacity when a job does not set one |
+
+Server defaults are applied at submission, so `GET /pipelines/{id}` shows the effective values a job ran with.
 
 ---
 
@@ -313,11 +331,11 @@ The server implements 12-factor configuration loading default JSON configuration
 | Method | Endpoint | Status | Description |
 | :--- | :--- | :--- | :--- |
 | `POST` | `/api/v1/pipelines` | `202 Accepted` | Submit and trigger a new pipeline execution job |
-| `GET` | `/api/v1/pipelines` | `200 OK` | List all submitted pipeline jobs and summary statuses |
+| `GET` | `/api/v1/pipelines` | `200 OK` | List jobs, newest first (`?status=&limit=&offset=`, total in `X-Total-Count`) |
 | `GET` | `/api/v1/pipelines/{id}` | `200 OK` | Retrieve detailed configuration and metrics for a job |
 | `GET` | `/api/v1/pipelines/{id}/progress` | `200 OK` | Poll real-time progress, processed counts, and stage latencies |
-| `GET` | `/api/v1/pipelines/{id}/results` | `200 OK` | Retrieve processed records, computed aggregations, and export paths |
-| `GET` | `/api/v1/pipelines/{id}/errors` | `200 OK` | Inspect quarantined errors and failed record details |
+| `GET` | `/api/v1/pipelines/{id}/results` | `200 OK` | Aggregations, export paths, and a page of records (`?limit=&offset=`, default 100) |
+| `GET` | `/api/v1/pipelines/{id}/errors` | `200 OK` | A page of errors and failed records (`?limit=&offset=`, default 100) |
 | `PATCH`| `/api/v1/pipelines/{id}/cancel` | `202 Accepted` | Trigger cooperative cancellation on a running job |
 | `DELETE`| `/api/v1/pipelines/{id}` | `204 No Content` | Delete a finished job, state entries, and export files |
 | `GET` | `/docs` | `200 OK` | Interactive embedded Swagger UI API documentation |
@@ -346,9 +364,10 @@ curl -sS -X POST http://localhost:8080/api/v1/pipelines \
 **Response (`202 Accepted`):**
 ```json
 {
-  "id": "20261104T100000.000000000-001",
+  "id": "20261104T154047.892Z-6b84441b8f46",
   "status": "PENDING",
-  "created_at": "2026-11-04T10:00:00Z"
+  "config": { "...": "the validated spec, with canonical paths and effective defaults" },
+  "created_at": "2026-11-04T15:40:47.892Z"
 }
 ```
 
@@ -367,68 +386,82 @@ curl -sS http://localhost:8080/api/v1/pipelines/<JOB_ID>/progress
 **Response (`200 OK`):**
 ```json
 {
-  "job_id": "20261104T100000.000000000-001",
-  "status": "RUNNING",
-  "percent_complete": 85.71,
+  "job_id": "20261104T154047.892Z-6b84441b8f46",
+  "status": "COMPLETED",
+  "percent_complete": 100,
   "processed": 6,
   "discovered": 7,
-  "pending": 1,
+  "pending": 0,
   "valid": 6,
   "rejected": 1,
   "error_count": 1,
-  "records_per_second": 3.82,
+  "started_at": "2026-11-04T21:10:47.893109+05:30",
+  "ended_at": "2026-11-04T21:10:47.895992+05:30",
+  "records_per_second": 2081.0,
   "stage_latency_ns": {
-    "validation": 420000,
-    "transformation": 310000,
-    "aggregation": 152000
+    "aggregation": 60792,
+    "export": 294333,
+    "export_finalize": 1186125,
+    "ingestion": 395208,
+    "transform": 35749,
+    "validation": 35541
   }
 }
 ```
 
+> `percent_complete` is `(processed + rejected) / discovered`. Sources are streamed, so the total is not known up front: `discovered` grows while ingestion runs, and the job is only `100%` once its status is `COMPLETED`. When finished, the response also carries `ended_at` and, for failed or cancelled jobs, an `error` reason.
+
 #### 4. Retrieve Computed Aggregations & Export Details
 ```bash
-curl -sS http://localhost:8080/api/v1/pipelines/<JOB_ID>/results
+curl -sS "http://localhost:8080/api/v1/pipelines/<JOB_ID>/results?limit=2&offset=0"
 ```
 
 **Response (`200 OK`):**
 ```json
 {
-  "job_id": "20261104T100000.000000000-001",
+  "job_id": "20261104T154047.892Z-6b84441b8f46",
   "status": "COMPLETED",
-  "records": [
-    {"department": "engineering", "name": "Alice", "salary": 120000},
-    {"department": "sales", "name": "Bob", "salary": 90000}
-  ],
   "aggregations": {
     "employee_count": {"engineering": 3, "sales": 3},
-    "salary_total": {"engineering": 365000, "sales": 265000},
-    "salary_average": {"engineering": 121666.67, "sales": 88333.33}
+    "salary_average": {"engineering": 121666.67, "sales": 88333.33},
+    "salary_total": {"engineering": 365000, "sales": 265000}
   },
-  "export_path": "exports/employees.json"
+  "export_path": "/app/exports/employees.json",
+  "artifacts": [
+    "/app/exports/employees.json",
+    "/app/exports/employees.aggregations.json",
+    "/app/exports/employees.csv"
+  ],
+  "total_records": 6,
+  "offset": 0,
+  "limit": 2,
+  "records": [
+    {"department": "sales", "name": "Dan", "salary": 80000},
+    {"department": "engineering", "name": "Alice", "salary": 120000}
+  ]
 }
 ```
 
 #### 5. Inspect Quarantined Errors
 ```bash
-curl -sS http://localhost:8080/api/v1/pipelines/<JOB_ID>/errors
+curl -sS "http://localhost:8080/api/v1/pipelines/<JOB_ID>/errors?limit=100&offset=0"
 ```
 
 **Response (`200 OK`):**
 ```json
 {
-  "job_id": "20261104T100000.000000000-001",
+  "job_id": "20261104T154047.892Z-6b84441b8f46",
+  "total": 1,
+  "offset": 0,
+  "limit": 100,
   "errors": [
     {
       "source": "employees-csv",
-      "index": 4,
+      "index": 5,
       "stage": "validation",
-      "message": "field \"salary\": invalid number \"invalid\"",
-      "record": {
-        "department": "Engineering",
-        "name": "Eve",
-        "salary": "invalid"
-      },
-      "at": "2026-11-04T10:00:00.120Z"
+      "message": "field \"salary\": invalid number \"invalid\": field type mismatch",
+      "record": {"department": "Engineering", "name": "Eve", "salary": "invalid"},
+      "at": "2026-11-04T15:40:47.894Z"
     }
   ]
 }
@@ -437,6 +470,16 @@ curl -sS http://localhost:8080/api/v1/pipelines/<JOB_ID>/errors
 #### 6. Cancel a Running Job
 ```bash
 curl -sS -X PATCH http://localhost:8080/api/v1/pipelines/<JOB_ID>/cancel
+```
+
+The job ends as `CANCELLED` with `"error": "cancelled: cancelled by user request"`. Records processed before the cancel stay queryable through `/results`; export files are not published for cancelled or timed-out jobs.
+
+#### 7. Paths, Limits & Validation Errors
+
+Local sources must be inside `INPUT_DIRS`; export and `dlq_path` targets must be inside `EXPORT_DIR` (relative paths such as `"out.json"` or `"exports/out.json"` resolve there). Every problem in a spec is reported at once with `400 Bad Request`:
+
+```json
+{"error": "source[0]: path is outside the permitted directories: \"/etc/hosts\" (allowed: samples)\nvalidation_workers must be <= 64 (got 2000000)"}
 ```
 
 ---
@@ -450,7 +493,7 @@ All inter-stage communication occurs across typed, bounded Go channels configure
 Validation and Transformation execute concurrently using parameterized worker pools. Workers consume records from input channels, process them concurrently, and forward valid items downstream. Aggregation employs single-consumer fan-in, ensuring thread-safe accumulator updates without mutex locking overhead on the critical path.
 
 ### Centralized Error Quarantine & Dead-Letter Handling
-A single corrupted record (e.g. malformed type, regex mismatch, or numeric out-of-bounds) never aborts pipeline execution. Bad rows are decorated with stage diagnostics and emitted to `errorCh`. When `dead_letter_path` is specified in the job configuration, the quarantined records and stack metadata are exported to disk automatically.
+A single corrupted record (e.g. malformed type, regex mismatch, or numeric out-of-bounds) never aborts pipeline execution. Bad rows are decorated with stage diagnostics and emitted to `errorCh`. When `dlq_path` is specified in the job configuration, the quarantined records and stack metadata are exported to disk automatically.
 
 ### Cooperative Cancellation Hierarchy
 Every job is bound to a hierarchical context:
@@ -459,6 +502,11 @@ ctx, cancel := context.WithTimeout(parent, time.Duration(cfg.TimeoutSeconds)*tim
 defer cancel()
 ```
 Cancellation triggers immediately via API (`PATCH /api/v1/pipelines/:id/cancel`) or timeout. Readers, HTTP requests (`http.NewRequestWithContext`), and worker pool `select` blocks terminate cooperatively, releasing file descriptors and goroutines cleanly. Terminal states are guaranteed persistence using dedicated non-cancelled contexts.
+
+Each job's root context is created with `context.WithCancelCause`, so the reason is recorded on the job (`error` field): `cancelled by user request`, `server shutting down`, or `job exceeded timeout of Ns`.
+
+### Graceful Shutdown & Crash Recovery
+On `SIGINT`/`SIGTERM` the server stops accepting requests, rejects new jobs with `503`, cancels running jobs, and waits up to `SHUTDOWN_TIMEOUT` for them to persist a `CANCELLED` state before closing the store. If the process is killed instead (OOM, `kill -9`), jobs left `PENDING`/`RUNNING` are marked `FAILED` ("interrupted") on the next start, so no job stays `RUNNING` forever. The process exits non-zero if the HTTP listener cannot bind.
 
 ### Transient HTTP Retries with Exponential Backoff
 Remote HTTP sources incorporate automatic retry logic for transient failures (e.g., connection resets or 5xx HTTP responses):

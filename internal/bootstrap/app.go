@@ -8,25 +8,27 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/anandmindfire/data-processing-pipeline/configs"
+	"github.com/anandmindfire/data-processing-pipeline/internal/config"
 )
 
 // App manages the application runtime lifecycle and graceful shutdown.
 type App struct {
-	Config       *configs.Config
+	Config       *config.Config
 	Dependencies *Dependencies
 	Server       *http.Server
 }
 
 // NewApp loads configuration, sets up dependencies, and initializes the HTTP server.
 func NewApp() (*App, error) {
-	cfg := configs.Load()
+	cfg := config.Load()
 	cfg.InitLogger()
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid application config: %w", err)
 	}
 
-	deps, err := BuildDependencies(cfg)
+	initCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	deps, err := BuildDependencies(initCtx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed initializing dependencies: %w", err)
 	}
@@ -49,8 +51,10 @@ func NewApp() (*App, error) {
 	}, nil
 }
 
-// Start launches the HTTP server asynchronously.
-func (a *App) Start() {
+// Start launches the HTTP server asynchronously. The returned channel receives an error (and is
+// closed) if the listener fails, e.g. because the port is already in use, so the caller can exit
+// instead of running without serving traffic.
+func (a *App) Start() <-chan error {
 	slog.Info("server listening",
 		"addr", a.Config.ServerAddr,
 		"port", a.Config.ServerPort,
@@ -61,17 +65,29 @@ func (a *App) Start() {
 		"max_active_jobs", a.Config.MaxActiveJobs,
 	)
 
+	errCh := make(chan error, 1)
 	go func() {
+		defer close(errCh)
 		if err := a.Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("server failed", "error", err)
+			errCh <- err
 		}
 	}()
+	return errCh
 }
 
-// Stop gracefully terminates the HTTP server and flushes repository handles.
+// Stop shuts down in dependency order: stop accepting HTTP requests, cancel and drain running
+// jobs (so they persist a CANCELLED state), then close the store.
 func (a *App) Stop(ctx context.Context) error {
 	slog.Info("shutting down application server...")
 	serverErr := a.Server.Shutdown(ctx)
+
+	var jobsErr error
+	if a.Dependencies != nil && a.Dependencies.Service != nil {
+		jobsErr = a.Dependencies.Service.Shutdown(ctx)
+		if jobsErr != nil {
+			slog.Warn("jobs did not stop before the shutdown deadline; they will be marked FAILED on next start", "error", jobsErr)
+		}
+	}
 
 	if a.Dependencies != nil && a.Dependencies.Store != nil {
 		if closeErr := a.Dependencies.Store.Close(); closeErr != nil {
@@ -79,5 +95,9 @@ func (a *App) Stop(ctx context.Context) error {
 		}
 	}
 
-	return serverErr
+	if a.Dependencies != nil && a.Dependencies.Limiter != nil {
+		a.Dependencies.Limiter.Close()
+	}
+
+	return errors.Join(serverErr, jobsErr)
 }

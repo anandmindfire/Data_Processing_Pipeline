@@ -15,12 +15,12 @@ import (
 	"github.com/anandmindfire/data-processing-pipeline/internal/bootstrap"
 )
 
+// resolveHealthCheckURL returns the URL the container health probe calls. It targets the local
+// listener (derived from PORT/ADDR) rather than API_BASE_URL, which is the public address and is
+// usually not reachable from inside the container. HEALTHCHECK_URL overrides it explicitly.
 func resolveHealthCheckURL() string {
-	if rawURL := os.Getenv("API_BASE_URL"); rawURL != "" {
-		return strings.TrimRight(rawURL, "/") + "/healthz"
-	}
-	if rawURL := os.Getenv("SERVER_URL"); rawURL != "" {
-		return strings.TrimRight(rawURL, "/") + "/healthz"
+	if rawURL := os.Getenv("HEALTHCHECK_URL"); rawURL != "" {
+		return rawURL
 	}
 
 	port := os.Getenv("PORT")
@@ -91,15 +91,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	app.Start()
+	serverErr := app.Start()
 
-	// Wait for OS shutdown signals
+	// Wait for an OS shutdown signal or a listener failure.
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigChan
-
-	slog.Info("received signal, initiating graceful shutdown", "signal", sig.String())
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	select {
+	case sig := <-sigChan:
+		slog.Info("received signal, initiating graceful shutdown", "signal", sig.String())
+	case err := <-serverErr:
+		slog.Error("http server failed", "error", err)
+		ctx, cancel := context.WithTimeout(context.Background(), app.Config.ShutdownTimeout)
+		_ = app.Stop(ctx)
+		cancel()
+		os.Exit(1)
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), app.Config.ShutdownTimeout)
 	defer cancel()
 
 	if err := app.Stop(shutdownCtx); err != nil {

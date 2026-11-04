@@ -1,20 +1,22 @@
 {
-  "job_id": "job-550e8400-e29b-41d4-a716-446655440000",
-  "status": "RUNNING",
-  "percent_complete": 85.71,
+  "job_id": "20261104T154047.892Z-6b84441b8f46",
+  "status": "COMPLETED",
+  "percent_complete": 100,
   "processed": 6,
   "discovered": 7,
-  "pending": 1,
+  "pending": 0,
   "valid": 6,
   "rejected": 1,
   "error_count": 1,
-  "started_at": "2026-11-03T10:00:00.050Z",
-  "ended_at": null,
-  "records_per_second": 3.82,
+  "started_at": "2026-11-04T21:10:47.893109+05:30",
+  "ended_at": "2026-11-04T21:10:47.895992+05:30",
+  "records_per_second": 2080.9554082470345,
   "stage_latency_ns": {
-    "aggregation": 152000,
-    "transformation": 310000,
-    "validation": 420000
+    "aggregation": 60792,
+    "export": 294333,
+    "export_finalize": 1186125,
+    "ingestion": 395208,
+    "transform": 35749,
+    "validation": 35541
   }
 }
-

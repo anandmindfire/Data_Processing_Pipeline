@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"maps"
 	"sync"
 	"time"
 
@@ -19,6 +20,8 @@ const (
 	progressLatency
 )
 
+// progressMsg is a single progress update. For progressLatency, count is the number of
+// operations whose combined duration is reported.
 type progressMsg struct {
 	kind     progressKind
 	count    int64
@@ -26,30 +29,66 @@ type progressMsg struct {
 	duration time.Duration
 }
 
-// startProgressTracker starts a background goroutine consuming progress updates.
-func startProgressTracker(progressCh <-chan progressMsg, job *models.Job, collector *metrics.Collector) *sync.WaitGroup {
+// startProgressTracker starts the single goroutine that owns job.Metrics while the pipeline runs.
+//
+// Every interval, if anything changed, it hands a copy of the metrics to snapshot so the job's
+// live progress can be persisted and served by the API. snapshot may be nil.
+func startProgressTracker(
+	progressCh <-chan progressMsg,
+	job *models.Job,
+	collector *metrics.Collector,
+	interval time.Duration,
+	snapshot func(models.Metrics),
+) *sync.WaitGroup {
 	var wg sync.WaitGroup
 	wg.Add(1)
 
 	go func() {
 		defer wg.Done()
 		if job == nil {
-			// Drain channel safely if job is nil to prevent blocking upstream pipeline workers
+			// Drain safely so upstream stages never block.
 			for range progressCh {
 			}
 			return
 		}
-
 		if job.Metrics.StageLatency == nil {
 			job.Metrics.StageLatency = make(map[string]time.Duration)
 		}
+		if interval <= 0 || snapshot == nil {
+			for msg := range progressCh {
+				applyProgressMsg(job, collector, msg)
+			}
+			return
+		}
 
-		for msg := range progressCh {
-			applyProgressMsg(job, collector, msg)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		dirty := false
+		for {
+			select {
+			case msg, ok := <-progressCh:
+				if !ok {
+					return
+				}
+				applyProgressMsg(job, collector, msg)
+				dirty = true
+			case <-ticker.C:
+				if dirty {
+					snapshot(metricsSnapshot(job.Metrics, time.Now()))
+					dirty = false
+				}
+			}
 		}
 	}()
 
 	return &wg
+}
+
+// metricsSnapshot deep-copies metrics and fills in the live throughput.
+func metricsSnapshot(m models.Metrics, now time.Time) models.Metrics {
+	m.StageLatency = maps.Clone(m.StageLatency)
+	updateThroughput(&m, m.StartedAt, now)
+	return m
 }
 
 func applyProgressMsg(job *models.Job, collector *metrics.Collector, msg progressMsg) {
@@ -68,7 +107,11 @@ func applyProgressMsg(job *models.Job, collector *metrics.Collector, msg progres
 	case progressLatency:
 		job.Metrics.StageLatency[msg.stage] += msg.duration
 		if collector != nil {
-			collector.ObserveStageLatency(msg.stage, msg.duration)
+			n := msg.count
+			if n <= 0 {
+				n = 1
+			}
+			collector.ObserveStageLatencyBatch(msg.stage, msg.duration, n)
 		}
 	}
 }

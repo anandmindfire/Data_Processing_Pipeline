@@ -25,6 +25,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 
 func TestRateLimiterMiddleware(t *testing.T) {
 	rl := NewRateLimiter(2.0, 2)
+	defer rl.Close()
 	okHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})

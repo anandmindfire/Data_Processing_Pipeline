@@ -1,22 +1,30 @@
 {
-  "job_id": "job-550e8400-e29b-41d4-a716-446655440000",
+  "job_id": "20261104T154047.892Z-6b84441b8f46",
   "status": "COMPLETED",
+  "aggregations": {
+    "employee_count": {
+      "engineering": 3,
+      "sales": 3
+    },
+    "salary_average": {
+      "engineering": 121666.66666666667,
+      "sales": 88333.33333333333
+    },
+    "salary_total": {
+      "engineering": 365000,
+      "sales": 265000
+    }
+  },
+  "export_path": "/app/exports/employees.json",
+  "artifacts": [
+    "/app/exports/employees.json",
+    "/app/exports/employees.aggregations.json",
+    "/app/exports/employees.csv"
+  ],
+  "total_records": 6,
+  "offset": 0,
+  "limit": 2,
   "records": [
-    {
-      "department": "engineering",
-      "name": "Alice",
-      "salary": 120000
-    },
-    {
-      "department": "sales",
-      "name": "Bob",
-      "salary": 90000
-    },
-    {
-      "department": "engineering",
-      "name": "Cara",
-      "salary": 135000
-    },
     {
       "department": "sales",
       "name": "Dan",
@@ -24,29 +32,8 @@
     },
     {
       "department": "engineering",
-      "name": "Fay",
-      "salary": 110000
-    },
-    {
-      "department": "sales",
-      "name": "Gus",
-      "salary": 95000
+      "name": "Alice",
+      "salary": 120000
     }
-  ],
-  "aggregations": {
-    "employee_count": {
-      "engineering": 3,
-      "sales": 3
-    },
-    "salary_average": {
-      "engineering": 121666.67,
-      "sales": 88333.33
-    },
-    "salary_total": {
-      "engineering": 365000,
-      "sales": 265000
-    }
-  },
-  "export_path": "exports/employees.json"
+  ]
 }
-
