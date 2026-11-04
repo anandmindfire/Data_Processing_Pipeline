@@ -13,7 +13,7 @@ func TestProgressTrackerAccumulation(t *testing.T) {
 	job := &models.Job{ID: "job-progress-test"}
 	collector := metrics.NewCollector()
 
-	wg := startProgressTracker(ch, job, collector)
+	wg := startProgressTracker(ch, job, collector, 0, nil)
 
 	ch <- progressMsg{kind: progressDiscovered, count: 100}
 	ch <- progressMsg{kind: progressProcessed, count: 80}
@@ -52,7 +52,7 @@ func TestProgressTrackerAccumulation(t *testing.T) {
 
 func TestProgressTrackerNilJob(t *testing.T) {
 	ch := make(chan progressMsg, 2)
-	wg := startProgressTracker(ch, nil, nil)
+	wg := startProgressTracker(ch, nil, nil, 0, nil)
 
 	ch <- progressMsg{kind: progressDiscovered, count: 10}
 	ch <- progressMsg{kind: progressProcessed, count: 10}
@@ -68,7 +68,7 @@ func TestProgressTrackerNilStageLatencyMap(t *testing.T) {
 	// Explicitly ensure StageLatency map is nil
 	job.Metrics.StageLatency = nil
 
-	wg := startProgressTracker(ch, job, nil)
+	wg := startProgressTracker(ch, job, nil, 0, nil)
 	ch <- progressMsg{kind: progressLatency, stage: "ingestion", duration: 15 * time.Millisecond}
 	close(ch)
 

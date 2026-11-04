@@ -16,8 +16,9 @@ type transformResult struct {
 	record models.Record
 }
 
-// startValidationWorkers launches a pool of workers validating records concurrently.
-// Ownership: callers must ensure raw channel is closed after ingestion finishes.
+// startValidationWorkers launches a pool of workers validating records concurrently (fan-out).
+// Ownership: the caller closes raw after ingestion finishes and closes valid after the returned
+// WaitGroup completes.
 func startValidationWorkers(
 	ctx context.Context,
 	workerCount int,
@@ -26,21 +27,24 @@ func startValidationWorkers(
 	raw <-chan ingestion.Item,
 	valid chan<- ingestion.Item,
 	errCh chan<- models.RecordError,
-	recordLatency func(string, time.Duration),
+	progressCh chan<- progressMsg,
 ) *sync.WaitGroup {
 	var wg sync.WaitGroup
 	for n := 0; n < workerCount; n++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			lat := newLatencyAccumulator(progressCh, "validation")
+			defer lat.flush()
 			for item := range raw {
-				start := time.Now()
 				if ctx.Err() != nil {
 					return
 				}
+				start := time.Now()
+				err := validator.Validate(item.Record, rules)
+				lat.add(time.Since(start))
 
-				if err := validator.Validate(item.Record, rules); err != nil {
-					recordLatency("validation", time.Since(start))
+				if err != nil {
 					select {
 					case errCh <- models.RecordError{
 						Source:  item.Source,
@@ -56,7 +60,6 @@ func startValidationWorkers(
 					continue
 				}
 
-				recordLatency("validation", time.Since(start))
 				select {
 				case valid <- item:
 				case <-ctx.Done():
@@ -77,13 +80,15 @@ func startTransformationWorkers(
 	valid <-chan ingestion.Item,
 	transformed chan<- transformResult,
 	errCh chan<- models.RecordError,
-	recordLatency func(string, time.Duration),
+	progressCh chan<- progressMsg,
 ) *sync.WaitGroup {
 	var wg sync.WaitGroup
 	for n := 0; n < workerCount; n++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			lat := newLatencyAccumulator(progressCh, "transform")
+			defer lat.flush()
 			for item := range valid {
 				if ctx.Err() != nil {
 					return
@@ -91,7 +96,7 @@ func startTransformationWorkers(
 
 				start := time.Now()
 				rec, err := transformer.Transform(item.Record, rules)
-				recordLatency("transform", time.Since(start))
+				lat.add(time.Since(start))
 				if err != nil {
 					select {
 					case errCh <- models.RecordError{

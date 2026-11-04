@@ -45,8 +45,8 @@ While our codebase exhibits **production-oriented code quality** through determi
 
 ## 2. In-Depth Blueprint: The 6 Production Pillars
 
-### 1. Replace JSON Snapshot Persistence with PostgreSQL
-* **Why it matters:** The current `FileRepository` ensures crash safety on a single node via atomic `write(tmp) + rename(state.json)`. However, it serializes writes across the entire process, suffers write amplification on large datasets, and cannot scale horizontally across multiple instances.
+### 1. Move the Job Store from Embedded SQLite to PostgreSQL (multi-replica)
+* **Why it matters:** The current `storage.SQLiteRepository` (WAL mode, batched transactional writes, versioned migrations) is durable and fast on a single node, but an embedded database file cannot be shared by several replicas behind a load balancer.
 * **Production Implementation:**
   * **Driver:** Use `jackc/pgx/v5` with connection pooling (`pgxpool.Pool`).
   * **Relational Schema:**

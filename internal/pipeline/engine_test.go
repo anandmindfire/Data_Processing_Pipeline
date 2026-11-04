@@ -8,9 +8,44 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anandmindfire/data-processing-pipeline/internal/export"
+	"github.com/anandmindfire/data-processing-pipeline/internal/ingestion"
+	"github.com/anandmindfire/data-processing-pipeline/internal/metrics"
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 	"github.com/anandmindfire/data-processing-pipeline/internal/storage"
+	"github.com/anandmindfire/data-processing-pipeline/internal/transformation"
+	"github.com/anandmindfire/data-processing-pipeline/internal/validation"
 )
+
+func validate(r models.Record, rules []models.Rule) error {
+	return validation.NewValidator().Validate(r, rules)
+}
+
+func transform(r models.Record, rules []models.Rule) (models.Record, error) {
+	return transformation.NewTransformer().Transform(r, rules)
+}
+
+func newTestPipeline(store storage.Repository, exportDir string, opts ...Option) *Pipeline {
+	return NewPipeline(
+		ingestion.NewReader(nil),
+		validation.NewValidator(),
+		transformation.NewTransformer(),
+		export.NewExporter(exportDir),
+		store,
+		metrics.NewCollector(),
+		opts...,
+	)
+}
+
+func newSQLiteStore(t *testing.T, dir string) storage.Repository {
+	t.Helper()
+	store, err := storage.NewSQLiteRepository(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	return store
+}
 
 func TestValidateAndTransform(t *testing.T) {
 	min := 0.0
@@ -115,10 +150,7 @@ func TestPipelineEndToEndWithCSVAndJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store, err := storage.New(filepath.Join(dir, "state"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newSQLiteStore(t, filepath.Join(dir, "state"))
 	outJSON := filepath.Join(dir, "out.json")
 	outCSV := filepath.Join(dir, "out.csv")
 
@@ -151,15 +183,11 @@ func TestPipelineEndToEndWithCSVAndJSON(t *testing.T) {
 		CreatedAt: time.Now(),
 	}
 
-	if err = store.PutJob(j); err != nil {
-		t.Fatal(err)
-	}
-	engine := Engine{Store: store}
-	engine.Run(context.Background(), j, func(*models.Job) {})
+	newTestPipeline(store, dir).Execute(context.Background(), j, nil)
 
-	saved, ok := store.GetJob(j.ID)
-	if !ok {
-		t.Fatal("job missing")
+	saved, ok, err := store.GetJob(context.Background(), j.ID)
+	if err != nil || !ok {
+		t.Fatalf("job missing: %v", err)
 	}
 	if saved.Status != models.StatusCompleted {
 		t.Fatalf("status=%s", saved.Status)
@@ -168,7 +196,11 @@ func TestPipelineEndToEndWithCSVAndJSON(t *testing.T) {
 	assertJobMetrics(t, saved.Metrics, 6, 5, 1)
 	assertAggregates(t, saved.Aggregates)
 	assertExportedCSV(t, outCSV, 6)
-	assertCollectedErrors(t, store.Errors(j.ID))
+	errs, _, _ := store.GetErrors(context.Background(), j.ID, 0, 0)
+	assertCollectedErrors(t, errs)
+	if len(saved.Artifacts) == 0 || saved.ResultsPath != outJSON {
+		t.Fatalf("expected artifacts and primary results path, got %q %v", saved.ResultsPath, saved.Artifacts)
+	}
 }
 
 func assertJobMetrics(t *testing.T, m models.Metrics, disc, proc, rej int64) {
@@ -248,7 +280,7 @@ func TestPipelineCancellation(t *testing.T) {
 	dir := t.TempDir()
 	input := filepath.Join(dir, "in.csv")
 	_ = os.WriteFile(input, []byte("x\n1\n2\n3\n"), 0644)
-	store, _ := storage.New(filepath.Join(dir, "state"))
+	store := storage.NewMemoryRepository()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	j := &models.Job{
@@ -258,10 +290,11 @@ func TestPipelineCancellation(t *testing.T) {
 			Exports: []models.ExportTarget{{Type: "json", Path: filepath.Join(dir, "out.json")}},
 		},
 	}
-	_ = store.PutJob(j)
-	engine := Engine{Store: store}
-	engine.Run(ctx, j, func(*models.Job) {})
-	if j.Status != models.StatusCancelled {
-		t.Fatalf("expected cancelled, got %s", j.Status)
+	newTestPipeline(store, dir).Execute(ctx, j, nil)
+	if j.Status != models.StatusCancelled || j.Error == "" {
+		t.Fatalf("expected cancelled with reason, got %s %q", j.Status, j.Error)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out.json")); !os.IsNotExist(err) {
+		t.Fatal("cancelled job must not publish partial exports")
 	}
 }

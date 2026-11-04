@@ -20,6 +20,7 @@ type Metrics struct {
 type Progress struct {
 	JobID            string                   `json:"job_id"`
 	Status           JobStatus                `json:"status"`
+	Error            string                   `json:"error,omitempty"`
 	Percent          float64                  `json:"percent_complete"`
 	Processed        int64                    `json:"processed"`
 	Discovered       int64                    `json:"discovered"`

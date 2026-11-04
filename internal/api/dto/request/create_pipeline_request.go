@@ -15,7 +15,8 @@ type CreatePipelineRequest struct {
 	BatchSize         int                   `json:"batch_size,omitempty"`
 	MaxRecords        int                   `json:"max_records,omitempty"`
 	DLQPath           string                `json:"dlq_path,omitempty"`
-	DeadLetterPath    string                `json:"dead_letter_path,omitempty"`
+	// Deprecated: use dlq_path. Accepted as an alias for backward compatibility.
+	DeadLetterPath string `json:"dead_letter_path,omitempty"`
 }
 
 // ToConfig converts CreatePipelineRequest into models.Config domain entity.
@@ -36,6 +37,5 @@ func (r CreatePipelineRequest) ToConfig() models.Config {
 		BatchSize:         r.BatchSize,
 		MaxRecords:        r.MaxRecords,
 		DLQPath:           dlq,
-		DeadLetterPath:    dlq,
 	}
 }

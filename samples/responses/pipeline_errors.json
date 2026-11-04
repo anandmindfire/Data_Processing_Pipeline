@@ -1,18 +1,20 @@
 {
-  "job_id": "job-550e8400-e29b-41d4-a716-446655440000",
+  "job_id": "20261104T154047.892Z-6b84441b8f46",
+  "total": 1,
+  "offset": 0,
+  "limit": 5,
   "errors": [
     {
       "source": "employees-csv",
-      "index": 4,
+      "index": 5,
       "stage": "validation",
-      "message": "field \"salary\": invalid number \"invalid\"",
+      "message": "field \"salary\": invalid number \"invalid\": field type mismatch",
       "record": {
         "department": "Engineering",
         "name": "Eve",
         "salary": "invalid"
       },
-      "at": "2026-11-03T10:00:00.120Z"
+      "at": "2026-11-04T15:40:47.894046Z"
     }
   ]
 }
-

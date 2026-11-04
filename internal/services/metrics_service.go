@@ -34,6 +34,7 @@ func (s *MetricsService) GetProgress(ctx context.Context, id string) (*models.Pr
 	return &models.Progress{
 		JobID:            id,
 		Status:           job.Status,
+		Error:            job.Error,
 		Percent:          percent,
 		Processed:        met.Processed,
 		Discovered:       met.Discovered,
@@ -48,14 +49,14 @@ func (s *MetricsService) GetProgress(ctx context.Context, id string) (*models.Pr
 	}, true, nil
 }
 
-// GetErrors retrieves error logs for a specific job.
-func (s *MetricsService) GetErrors(ctx context.Context, id string) ([]models.RecordError, bool, error) {
+// GetErrors retrieves a page of error logs for a job, the total error count, and whether the job exists.
+func (s *MetricsService) GetErrors(ctx context.Context, id string, offset, limit int) ([]models.RecordError, int, bool, error) {
 	_, found, err := s.storage.GetJob(ctx, id)
 	if err != nil || !found {
-		return nil, false, err
+		return nil, 0, false, err
 	}
-	errs, err := s.storage.GetErrors(ctx, id)
-	return errs, true, err
+	errs, total, err := s.storage.GetErrors(ctx, id, offset, limit)
+	return errs, total, true, err
 }
 
 func calculatePercent(m models.Metrics, status models.JobStatus) float64 {

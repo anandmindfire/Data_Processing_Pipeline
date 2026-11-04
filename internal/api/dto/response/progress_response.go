@@ -10,6 +10,7 @@ import (
 type ProgressResponse struct {
 	JobID            string                   `json:"job_id"`
 	Status           models.JobStatus         `json:"status"`
+	Error            string                   `json:"error,omitempty"`
 	Percent          float64                  `json:"percent_complete"`
 	Processed        int64                    `json:"processed"`
 	Discovered       int64                    `json:"discovered"`
@@ -31,6 +32,7 @@ func FromProgress(p *models.Progress) ProgressResponse {
 	return ProgressResponse{
 		JobID:            p.JobID,
 		Status:           p.Status,
+		Error:            p.Error,
 		Percent:          p.Percent,
 		Processed:        p.Processed,
 		Discovered:       p.Discovered,

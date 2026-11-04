@@ -26,11 +26,14 @@ Every pipeline job executes under a hierarchical `context.Context` derived from 
 
 | Decision | Choice Made | Rationale & Trade-offs |
 | :--- | :--- | :--- |
-| **Persistence** | `storage.Repository` interface (`FileRepository` & `MemoryRepository`) | Adheres to assignment requirements without external DB overhead; atomic crash-safety via temp write + rename. Ready for drop-in PostgreSQL migration. |
+| **Persistence** | Embedded SQLite (`database/sql` + pure-Go `modernc.org/sqlite`, WAL, versioned migrations) behind `storage.Repository`; in-memory store for tests | Durable, queryable job/record/error store with no external service and no CGO. Writes are batched (500 records / 256 errors per transaction). Single-node by design; the interface allows a Postgres implementation for multi-replica deployments. |
+| **Live Progress** | Progress tracker owns `job.Metrics` and persists a snapshot every 500 ms | Progress is visible while the job runs without sharing mutable state across goroutines; the trade-off is up to 500 ms of staleness. `percent_complete` is relative to records discovered so far, because streamed sources have no known total. |
 | **State Synchronization** | Fan-In sequential aggregation | Eliminates mutex contention on the hot path. Memory footprint scales with aggregate group cardinality. |
 | **Fault Tolerance** | Quarantine pattern + Dead-Letter sink | Isolates corrupted records with stage metadata; 1 bad row does not fail the batch. Unrecoverable rows exported to disk. |
 | **Ingestion Resilience** | HTTP 3x exponential backoff retry | Transparently absorbs transient network hiccups and 5xx server errors without failing the pipeline. |
-| **Multi-Sink Export** | JSON, RFC 4180 CSV & Transactional SQLite dump | Generates schema DDL and bulk INSERT transactions importable into SQLite without CGO build complexity. |
+| **Streaming Export** | Export goroutine streams batches to JSON, CSV, a real SQLite database and a SQL dump; files are published by atomic rename | Bounded memory (CSV/SQL headers are spooled to disk) and no partial files for cancelled/failed jobs. Aggregations go to an `aggregations` table or a JSON sidecar. |
+| **Security Boundaries** | Input paths sandboxed to `INPUT_DIRS`, outputs to `EXPORT_DIR`; dial-time SSRF checks; per-job resource limits | The API accepts file paths and URLs from clients, so the server, not the client, decides what it may read, write, or connect to. |
+| **Lifecycle** | `WithCancelCause` per job; graceful drain on `SIGTERM`; restart reconciliation | Every terminal job records why it ended; no job is left `RUNNING` after a crash. |
 | **API Transport & Routing** | `net/http` + `chi/v5` router | Zero-allocation routing with subrouter mounting, URL parameter extraction, and standard middleware chaining. |
 
 See [docs/production-readiness.md](docs/production-readiness.md) for the roadmap bridging this codebase into multi-node Kubernetes enterprise deployments.

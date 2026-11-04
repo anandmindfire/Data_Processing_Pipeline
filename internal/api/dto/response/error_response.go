@@ -13,5 +13,7 @@ type ErrorResponse struct {
 type ErrorsListResponse struct {
 	JobID  string               `json:"job_id"`
 	Total  int                  `json:"total"`
+	Offset int                  `json:"offset"`
+	Limit  int                  `json:"limit"`
 	Errors []models.RecordError `json:"errors"`
 }

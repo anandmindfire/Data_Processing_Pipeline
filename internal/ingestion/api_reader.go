@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
@@ -40,11 +41,17 @@ func executeSingleHTTPRequest(ctx context.Context, src models.Source, client *ht
 }
 
 // fetchHTTP retrieves payload from an HTTP/API endpoint with exponential backoff retry for transient failures.
-func fetchHTTP(ctx context.Context, src models.Source, client *http.Client) (io.ReadCloser, error) {
+func fetchHTTP(ctx context.Context, src models.Source, client *http.Client, allowPrivate bool) (io.ReadCloser, error) {
 	if src.URL == "" {
 		return nil, fmt.Errorf("source %q: URL is required for HTTP/API sources", src.Name)
 	}
-	if err := ValidatePublicURL(src.URL); err != nil {
+	if allowPrivate {
+		if u, err := url.Parse(src.URL); err != nil {
+			return nil, fmt.Errorf("source %q: invalid URL: %w", src.Name, err)
+		} else if err := validateURLStructure(u); err != nil {
+			return nil, fmt.Errorf("source %q: %w", src.Name, err)
+		}
+	} else if err := ValidatePublicURL(src.URL); err != nil {
 		return nil, fmt.Errorf("source %q: %w", src.Name, err)
 	}
 	if client == nil {

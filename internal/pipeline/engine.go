@@ -2,8 +2,8 @@ package pipeline
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/anandmindfire/data-processing-pipeline/internal/aggregation"
@@ -16,14 +16,43 @@ import (
 	"github.com/anandmindfire/data-processing-pipeline/internal/validation"
 )
 
+// Fallback values used when neither the job spec nor the service configuration provides one.
+const (
+	DefaultWorkers          = 4
+	DefaultBufferSize       = 128
+	DefaultTimeoutSeconds   = 300
+	DefaultBatchSize        = 500
+	DefaultProgressInterval = 500 * time.Millisecond
+	DefaultFlushInterval    = 250 * time.Millisecond
+)
+
 // Pipeline coordinates the execution of an end-to-end data processing workflow.
 type Pipeline struct {
-	reader      ingestion.Reader
-	validator   validation.Validator
-	transformer transformation.Transformer
-	exporter    export.Exporter
-	storage     storage.Repository
-	collector   *metrics.Collector
+	reader           ingestion.Reader
+	validator        validation.Validator
+	transformer      transformation.Transformer
+	exporter         export.Exporter
+	storage          storage.Repository
+	collector        *metrics.Collector
+	progressInterval time.Duration
+	flushInterval    time.Duration
+}
+
+// Option customizes a Pipeline.
+type Option func(*Pipeline)
+
+// WithProgressInterval sets how often live progress snapshots are persisted (<= 0 disables them).
+func WithProgressInterval(d time.Duration) Option {
+	return func(p *Pipeline) { p.progressInterval = d }
+}
+
+// WithFlushInterval sets the maximum time a partial record/error batch waits before being persisted.
+func WithFlushInterval(d time.Duration) Option {
+	return func(p *Pipeline) {
+		if d > 0 {
+			p.flushInterval = d
+		}
+	}
 }
 
 // NewPipeline constructs a Pipeline via dependency injection.
@@ -34,37 +63,54 @@ func NewPipeline(
 	exporter export.Exporter,
 	store storage.Repository,
 	collector *metrics.Collector,
+	opts ...Option,
 ) *Pipeline {
 	if collector == nil {
 		collector = metrics.GlobalCollector
 	}
-	return &Pipeline{
-		reader:      reader,
-		validator:   validator,
-		transformer: transformer,
-		exporter:    exporter,
-		storage:     store,
-		collector:   collector,
+	p := &Pipeline{
+		reader:           reader,
+		validator:        validator,
+		transformer:      transformer,
+		exporter:         exporter,
+		storage:          store,
+		collector:        collector,
+		progressInterval: DefaultProgressInterval,
+		flushInterval:    DefaultFlushInterval,
 	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
-// applyDefaults populates missing worker and timeout settings with sensible defaults.
+// applyDefaults populates missing worker, batch, and timeout settings.
 func applyDefaults(cfg *models.Config) {
 	if cfg.ValidationWorkers <= 0 {
-		cfg.ValidationWorkers = 4
+		cfg.ValidationWorkers = DefaultWorkers
 	}
 	if cfg.TransformWorkers <= 0 {
-		cfg.TransformWorkers = 4
+		cfg.TransformWorkers = DefaultWorkers
 	}
 	if cfg.BufferSize <= 0 {
-		cfg.BufferSize = 128
+		cfg.BufferSize = DefaultBufferSize
 	}
 	if cfg.TimeoutSeconds <= 0 {
-		cfg.TimeoutSeconds = 300
+		cfg.TimeoutSeconds = DefaultTimeoutSeconds
+	}
+	if cfg.BatchSize <= 0 {
+		cfg.BatchSize = DefaultBatchSize
 	}
 }
 
-// Execute runs the full pipeline for a job, publishing updates to storage.
+// Execute runs the full pipeline for a job and persists its state (including live progress
+// snapshots while it runs). onUpdate, if non-nil, is called when the job starts and finishes.
+//
+// Stage topology:
+//
+//	sources ─► raw ─► [validation pool] ─► valid ─► [transform pool] ─► transformed
+//	        ─► [aggregator] ─► result ─► [export stage: storage + sinks]
+//	every stage ─► errors ─► [error collector]      every stage ─► progress ─► [progress tracker]
 func (p *Pipeline) Execute(parent context.Context, job *models.Job, onUpdate func(*models.Job)) {
 	cfg := job.Config
 	applyDefaults(&cfg)
@@ -74,123 +120,117 @@ func (p *Pipeline) Execute(parent context.Context, job *models.Job, onUpdate fun
 	defer cancel()
 
 	slog.Info("pipeline job started", "job_id", job.ID, "sources_count", len(cfg.Sources))
-
+	now := time.Now()
 	job.Status = models.StatusRunning
-	job.Metrics.StartedAt = time.Now()
+	job.Metrics.StartedAt = now
 	job.Metrics.StageLatency = make(map[string]time.Duration)
-	_ = p.storage.SaveJob(ctx, job)
-	if onUpdate != nil {
-		onUpdate(job)
+	job.UpdatedAt = now
+	p.persist(job)
+	notify(onUpdate, job)
+
+	session, err := p.exporter.Open(job.ID, cfg.Exports)
+	if err != nil {
+		p.finalizeJob(ctx, parent, job, nil, err, 0)
+		notify(onUpdate, job)
+		return
 	}
 
-	// 1. Channel graph setup
+	// Snapshot base: copied before any goroutine starts, so the tracker never reads fields the
+	// coordinator goroutine mutates later (ResultsPath, Artifacts, Aggregates, Status).
+	base := *job
+	snapshot := func(m models.Metrics) {
+		s := base
+		s.Metrics = m
+		s.UpdatedAt = time.Now()
+		p.persist(&s)
+	}
+
 	channels := NewPipelineChannels(cfg.BufferSize)
+	progressWG := startProgressTracker(channels.Progress, job, p.collector, p.progressInterval, snapshot)
+	errWG := startErrorCollector(ctx, channels.Errors, job.ID, p.storage, channels.Progress, p.flushInterval)
 
-	// 2. Start side-channel listener: Progress Tracking
-	progressWG := startProgressTracker(channels.Progress, job, p.collector)
-
-	// 3. Start side-channel listener: Centralized Error Collection
-	errWG := startErrorCollector(ctx, channels.Errors, job.ID, p.storage, channels.Progress)
-
-	// 4. Ingestion Stage
 	ingestFailures := p.startIngestion(ctx, cfg, channels.Raw, channels.Progress, channels.Errors)
 
-	// 5. Validation Stage
-	recLatency := func(stage string, d time.Duration) {
-		recordStageLatency(channels.Progress, stage, d)
-	}
-	validatorWG := startValidationWorkers(ctx, cfg.ValidationWorkers, p.validator, cfg.Rules, channels.Raw, channels.Valid, channels.Errors, recLatency)
+	validatorWG := startValidationWorkers(ctx, cfg.ValidationWorkers, p.validator, cfg.Rules, channels.Raw, channels.Valid, channels.Errors, channels.Progress)
 	go func() {
 		validatorWG.Wait()
 		close(channels.Valid)
 	}()
 
-	// 6. Transformation Stage
-	transformWG := startTransformationWorkers(ctx, cfg.TransformWorkers, p.transformer, cfg.Rules, channels.Valid, channels.Transformed, channels.Errors, recLatency)
+	transformWG := startTransformationWorkers(ctx, cfg.TransformWorkers, p.transformer, cfg.Rules, channels.Valid, channels.Transformed, channels.Errors, channels.Progress)
 	go func() {
 		transformWG.Wait()
 		close(channels.Transformed)
 	}()
 
-	// 7. Aggregation Stage
 	agg := aggregation.NewAggregator(cfg.Aggregations)
-	p.runAggregationAndExport(ctx, job, agg, channels.Transformed, channels.Result, channels.Progress)
+	exportErr := p.runAggregationAndExport(ctx, job.ID, cfg.BatchSize, agg, session, channels)
+	aggregates := agg.Finalize()
 
-	// Perform file exports
-	exportStart := time.Now()
-	exportedRecords, _ := p.storage.GetRecords(ctx, job.ID)
-	primaryPath, expErr := p.exporter.Export(exportedRecords, cfg.Exports, job.ID)
-	recordStageLatency(channels.Progress, "export", time.Since(exportStart))
-	if expErr != nil {
-		slog.Error("pipeline export failed", "job_id", job.ID, "error", expErr)
-		channels.Errors <- models.RecordError{Stage: "export", Message: expErr.Error(), At: time.Now()}
-	} else {
-		job.ResultsPath = primaryPath
-		channels.Progress <- progressMsg{kind: progressExported, count: int64(len(exportedRecords))}
+	// Publish exports only for runs that finished normally; cancelled or timed-out runs keep
+	// their persisted records (queryable via the API) but never publish partial files.
+	switch {
+	case exportErr != nil || ctx.Err() != nil:
+		session.Abort()
+	default:
+		start := time.Now()
+		exportErr = session.Close(aggregates)
+		recordStageLatency(channels.Progress, "export_finalize", time.Since(start))
+		if exportErr != nil {
+			session.Abort()
+		} else {
+			job.ResultsPath = session.Primary()
+			job.Artifacts = session.Artifacts()
+		}
+	}
+	if exportErr != nil {
+		slog.Error("pipeline export failed", "job_id", job.ID, "error", exportErr)
+		channels.Errors <- models.RecordError{Stage: "export", Message: exportErr.Error(), At: time.Now()}
 	}
 
-	// Close error channel after pipeline workers finish
 	close(channels.Errors)
 	errWG.Wait()
 
-	dlq := cfg.DLQPath
-	if dlq == "" {
-		dlq = cfg.DeadLetterPath
-	}
-	if dlq != "" {
-		exportDeadLetterRecords(ctx, dlq, job.ID, p.storage)
+	if cfg.DLQPath != "" {
+		written, err := exportDeadLetterRecords(context.WithoutCancel(ctx), cfg.DLQPath, job.ID, p.storage)
+		if err != nil {
+			slog.Error("dead-letter export failed", "job_id", job.ID, "error", err)
+		} else if written {
+			job.Artifacts = append(job.Artifacts, cfg.DLQPath)
+		}
 	}
 
 	close(channels.Progress)
 	progressWG.Wait()
 
-	// 8. Finalize job status and metrics
-	p.finalizeJob(ctx, parent, job, agg, expErr, int(ingestFailures.Load()))
+	p.finalizeJob(ctx, parent, job, aggregates, exportErr, int(ingestFailures.Load()))
 	slog.Info("pipeline job finished",
 		"job_id", job.ID,
 		"status", job.Status,
 		"processed", job.Metrics.Processed,
-		"valid", job.Metrics.Valid,
 		"rejected", job.Metrics.Rejected,
 		"errors", job.Metrics.Errors,
+		"duration", job.Metrics.EndedAt.Sub(job.Metrics.StartedAt).String(),
 	)
+	notify(onUpdate, job)
+}
+
+func notify(onUpdate func(*models.Job), job *models.Job) {
 	if onUpdate != nil {
 		onUpdate(job)
 	}
 }
 
-// Engine wraps Pipeline for backward compatibility.
-type Engine struct {
-	Store  *storage.Store
-	Client *http.Client
-}
-
-// Run executes the pipeline using the underlying Pipeline coordinator.
-func (e *Engine) Run(parent context.Context, j *models.Job, update func(*models.Job)) {
-	repo := e.Store.Repository()
-	client := e.Client
-	if client == nil {
-		client = http.DefaultClient
+// persist saves job state using a context that survives job cancellation.
+func (p *Pipeline) persist(job *models.Job) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := p.storage.SaveJob(ctx, job); err != nil {
+		slog.Error("failed persisting job state", "job_id", job.ID, "error", err)
 	}
-
-	pipe := NewPipeline(
-		ingestion.NewReader(client),
-		validation.NewValidator(),
-		transformation.NewTransformer(),
-		export.NewExporter("exports"),
-		repo,
-		metrics.GlobalCollector,
-	)
-	pipe.Execute(parent, j, update)
 }
 
-// Helpers exposed for unit test compatibility.
-func validate(r models.Record, rules []models.Rule) error {
-	v := validation.NewValidator()
-	return v.Validate(r, rules)
-}
-
-func transform(r models.Record, rules []models.Rule) (models.Record, error) {
-	t := transformation.NewTransformer()
-	return t.Transform(r, rules)
+// timeoutError describes a job that exceeded its configured timeout.
+func timeoutError(seconds int) error {
+	return fmt.Errorf("job exceeded timeout of %ds", seconds)
 }
