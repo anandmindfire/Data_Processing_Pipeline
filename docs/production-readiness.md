@@ -123,7 +123,7 @@ While our codebase exhibits **production-oriented code quality** through determi
 
 ### 5. Rate Limiting & Concurrency Quotas
 * **Current Code Quality Milestone:**
-  * In this codebase, we have implemented **local token-bucket rate limiting** per client IP via [internal/api/middleware/ratelimit.go](file:///Users/anandk/Projects/data-processing-pipeline/internal/api/middleware/ratelimit.go) and **job concurrency quotas** via `MaxActiveJobs` in [internal/pipeline/manager.go](file:///Users/anandk/Projects/data-processing-pipeline/internal/pipeline/manager.go).
+  * In this codebase, we have implemented **local token-bucket rate limiting** per client IP via [internal/api/middleware/ratelimit.go](file:///Users/anandk/Projects/data-processing-pipeline/internal/api/middleware/ratelimit.go) and **job concurrency quotas** via `MaxActiveJobs` in [internal/jobs/manager.go](file:///Users/anandk/Projects/data-processing-pipeline/internal/jobs/manager.go).
 * **Production Scalability Roadmap:**
   * For multi-replica API deployments, migrate from in-memory token buckets to a **Distributed Rate Limiter** backed by Redis using the `Redis Token Bucket` or `Sliding Window Counter` Lua script.
   * Implement hierarchical quotas:
