@@ -1,10 +1,10 @@
 # Concurrent Data Processing Pipeline (Go)
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/anandmindfire/data-processing-pipeline)](https://goreportcard.com/report/github.com/anandmindfire/data-processing-pipeline)
+[![Go Reference](https://pkg.go.dev/badge/github.com/anandmindfire/data-processing-pipeline.svg)](https://pkg.go.dev/github.com/anandmindfire/data-processing-pipeline)
 [![CI Pipeline](https://github.com/anandmindfire/data-processing-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/anandmindfire/data-processing-pipeline/actions/workflows/ci.yml)
 [![OpenAPI Spec](https://img.shields.io/badge/OpenAPI-3.0.3-blue.svg)](docs/openapi.json)
 [![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8.svg)](go.mod)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Code Quality](https://img.shields.io/badge/code%20quality-golangci--lint-brightgreen.svg)](.golangci.yml)
 [![Zero Data Races](https://img.shields.io/badge/go%20test%20-race-brightgreen.svg)](Makefile)
 
 A robust, production-oriented, concurrent data processing engine and job management REST service implemented in idiomatic Go. It ingests data from heterogeneous sources (CSV files, JSON files, external HTTP APIs), validates and cleans records against schema and business rules, executes parallel transformations, calculates grouped analytical aggregations, and exports results to storage targets — all while supporting real-time progress tracking, error quarantine, cancellation, and automated tests.
@@ -15,8 +15,7 @@ A robust, production-oriented, concurrent data processing engine and job managem
 
 - [Key Architectural Highlights](#key-architectural-highlights)
 - [System Architecture](#system-architecture)
-  - [High-Level Layered Architecture](#high-level-layered-architecture)
-  - [5-Stage Channel Mesh & Data Flow](#5-stage-channel-mesh--data-flow)
+  - [How Data Moves Through the Pipeline](#how-data-moves-through-the-pipeline)
 - [Technology Stack](#technology-stack)
 - [Project Layout (Clean Architecture)](#project-layout-clean-architecture)
 - [Quickstart Guide](#quickstart-guide)
@@ -56,92 +55,34 @@ A robust, production-oriented, concurrent data processing engine and job managem
 
 ## System Architecture
 
-### High-Level Layered Architecture
+The pipeline processes data using an asynchronous, stage-by-stage architecture connected by bounded Go channels. A client submits a job via the REST API; the Job Manager coordinates lifecycle execution under a cancellation context; and independent worker pools process records concurrently with natural backpressure and error quarantine:
 
 ```mermaid
-flowchart TD
-  subgraph Ingress ["API & Transport Layer (HTTP REST)"]
-    direction TB
-    CLI["Client / curl / UI"] -->|"HTTP Requests"| MW["Middleware Chain<br/>(Panic Recovery, slog Logger, Token-Bucket Rate Limiter)"]
-    MW --> ROUTER["chi v5 Router<br/>/api/v1/pipelines"]
-    ROUTER --> DOCS["Swagger UI (/docs)<br/>Prometheus (/metrics)<br/>Health (/healthz)"]
-  end
+flowchart LR
+    CLIENT["Client / HTTP API"] -->|"POST /api/v1/pipelines"| API["chi REST API &<br/>Job Manager"]
+    API -->|"Start Job (context)"| INGEST
 
-  subgraph ControlPlane ["Job Orchestration & Control Plane"]
-    ROUTER -->|"Submit Job"| MGR["jobs.Manager"]
-    MGR -->|"Check Quotas & Lifecycle"| QUOTA["Active Job Limit<br/>(MaxActiveJobs)"]
-    MGR -->|"Manage Cancellation"| CTX["context.Context Hierarchy<br/>(WithTimeout + WithCancel)"]
-  end
-
-  subgraph Engine ["5-Stage Concurrent Pipeline Engine"]
-    direction TB
-    subgraph S1 ["Stage 1: Ingestion Fan-Out"]
-      SRC1["CSV Reader (Local/Remote)"]
-      SRC2["JSON Reader (Streaming)"]
-      SRC3["HTTP Reader (3x Retry + Backoff)"]
+    subgraph PIPELINE ["Concurrent Pipeline Engine (Goroutines + Bounded Channels)"]
+        direction LR
+        INGEST["1. Ingestion<br/>(CSV, JSON, HTTP)"] -->|"recordsCh"| VAL["2. Validation<br/>(Worker Pool)"]
+        VAL -->|"validatedCh"| TRANS["3. Transformation<br/>(Worker Pool)"]
+        TRANS -->|"transformedCh"| AGG["4. Aggregation<br/>(Group-by Stats)"]
+        AGG -->|"resultCh"| EXP["5. Export Stage"]
     end
 
-    subgraph Buffers ["Bounded Channel Mesh & Telemetry"]
-      R_CH[("recordsCh<br/>(Bounded Backpressure)")]
-      V_CH[("validatedCh<br/>(Bounded)")]
-      T_CH[("transformedCh<br/>(Bounded)")]
-      RES_CH[("resultCh<br/>(Bounded)")]
-      ERR_CH[("errorCh<br/>(Quarantine)")]
-      PROG_CH[("progressCh<br/>(Telemetry Stream)")]
-    end
-
-    subgraph S2 ["Stage 2: Validation Fan-Out"]
-      VAL_POOL["Validation Worker Pool<br/>(Type, Bounds, Pattern Caching)"]
-    end
-
-    subgraph S3 ["Stage 3: Transformation Fan-Out"]
-      TR_POOL["Transformation Worker Pool<br/>(Normalization, Math, Fallbacks)"]
-    end
-
-    subgraph S4 ["Stage 4: Aggregation Fan-In"]
-      AGG["Single-Consumer Aggregator<br/>(Group-by Count, Sum, Avg, Min, Max)"]
-    end
-
-    subgraph S5 ["Stage 5: Multi-Sink Export"]
-      EXP["Export Dispatcher<br/>(JSON, CSV, SQLite DDL/INSERT, Dead-Letter)"]
-    end
-
-    S1 --> R_CH
-    R_CH --> VAL_POOL
-    VAL_POOL -->|"Valid Records"| V_CH
-    VAL_POOL -->|"Invalid Records"| ERR_CH
-    VAL_POOL -.->|"Latency"| PROG_CH
-
-    V_CH --> TR_POOL
-    TR_POOL -->|"Transformed Records"| T_CH
-    TR_POOL -->|"Transform Errors"| ERR_CH
-    TR_POOL -.->|"Latency"| PROG_CH
-
-    T_CH --> AGG
-    AGG -->|"Stream Record"| RES_CH
-    AGG -.->|"Latency"| PROG_CH
-
-    RES_CH --> EXP
-    EXP -.->|"Export Stats"| PROG_CH
-  end
-
-  subgraph Persistence ["Persistence & Observability Layer"]
-    ERR_CH -->|"Drain Errors"| ERR_COL["Error Collector Goroutine"]
-    PROG_CH -->|"Drain Telemetry"| PROG_COL["Progress Tracker Goroutine"]
-    EXP --> REPO[("storage.Repository<br/>(Atomic File / In-Memory / PostgreSQL)")]
-    ERR_COL --> REPO
-    PROG_COL --> METRICS["Prometheus Metrics Collector<br/>(GlobalCollector)"]
-    PROG_COL -.-> REPO
-  end
+    EXP -->|"Write Data"| SINKS[("Export Targets<br/>JSON / CSV / SQLite")]
+    VAL -.->|"invalid records"| DLQ[("Errors &<br/>Dead-Letter File")]
+    TRANS -.->|"errors"| DLQ
+    PIPELINE -.->|"telemetry"| METRICS["Prometheus /metrics &<br/>Progress Telemetry"]
 ```
 
-### 5-Stage Channel Mesh & Data Flow
+### How Data Moves Through the Pipeline
 
-1. **Stage 1 (Ingestion Fan-Out):** Each input source runs in an independent goroutine, streaming parsed records (`ingestion.Item`) into a bounded channel (`rawCh`). If a remote HTTP source experiences a 5xx error or transient network drop, it automatically retries up to 3 times with exponential backoff.
-2. **Stage 2 (Validation Fan-Out):** A configurable pool of validation workers (`ValidationWorkers`) checks required fields, data types, numeric boundaries, and regex patterns (using cached precompiled expressions). Valid records move to `validCh`; invalid rows are diverted to `errCh`.
-3. **Stage 3 (Transformation Fan-Out):** A configurable pool of transformation workers (`TransformWorkers`) applies casing normalization, trimming, mathematical scaling, offsets, and fallback default values. Output records stream to `transformedCh`.
-4. **Stage 4 (Aggregation Fan-In):** A single-consumer goroutine drains `transformedCh` and updates grouped accumulators (`count`, `sum`, `avg`, `min`, `max`). Single ownership eliminates mutex contention on the hot path.
-5. **Stage 5 (Multi-Sink Export):** Transformed records and computed summary aggregates are written to specified targets (JSON, CSV, SQLite DDL/INSERT batch, and Dead-Letter queue files).
+1. **Ingestion (Fan-Out):** Concurrent readers stream data from CSV files, JSON files, or HTTP APIs into a bounded channel (`recordsCh`). HTTP requests automatically retry transient failures up to 3 times with exponential backoff.
+2. **Validation (Worker Pool):** Parallel workers validate records against schema and business rules (types, min/max, regex). Invalid rows are diverted to `errorCh` without stopping the pipeline.
+3. **Transformation (Worker Pool):** Parallel workers normalize strings, apply mathematical scaling, and set fallback default values.
+4. **Aggregation (Fan-In):** A single consumer accumulates group-by statistics (`count`, `sum`, `avg`, `min`, `max`), eliminating lock contention on the hot path.
+5. **Export (Multi-Sink):** Valid records and aggregations are exported to JSON, RFC 4180 CSV, or transactional SQLite DDL & batch `INSERT` scripts. Quarantined records can be written to a dead-letter file.
 
 ---
 
