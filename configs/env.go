@@ -2,6 +2,8 @@ package configs
 
 import (
 	"bufio"
+	"log/slog"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -33,15 +35,27 @@ func LoadEnvFile(path string) {
 			}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		slog.Warn("failed scanning env file lines", "path", path, "error", err)
+	}
 }
 
 // ApplyEnvironmentOverrides updates Config with environment variable overrides.
 func ApplyEnvironmentOverrides(cfg *Config) {
-	cfg.ServerPort = GetEnv("PORT", cfg.ServerPort)
-	cfg.ServerAddr = GetEnv("ADDR", cfg.ServerAddr)
-	if cfg.ServerAddr == ":8080" && cfg.ServerPort != "8080" {
-		cfg.ServerAddr = ":" + cfg.ServerPort
+	cfg.ServerPort = GetEnvFirst([]string{"PORT", "SERVER_PORT"}, cfg.ServerPort)
+	cfg.ServerAddr = GetEnvFirst([]string{"ADDR", "SERVER_ADDR"}, cfg.ServerAddr)
+	syncServerAddress(cfg)
+
+	cfg.APIBaseURL = GetEnvFirst([]string{"API_BASE_URL", "BASE_URL", "SERVER_URL"}, cfg.APIBaseURL)
+	if cfg.APIBaseURL == "http://localhost:8080" && cfg.ServerPort != "8080" {
+		cfg.APIBaseURL = "http://localhost:" + cfg.ServerPort
 	}
+
+	cfg.APIBasePath = GetEnvFirst([]string{"API_BASE_PATH", "API_PREFIX"}, cfg.APIBasePath)
+	if cfg.APIBasePath != "" {
+		cfg.APIBasePath = "/" + strings.Trim(cfg.APIBasePath, "/")
+	}
+
 	cfg.APIKey = GetEnv("API_KEY", cfg.APIKey)
 	cfg.DataDir = GetEnv("DATA_DIR", cfg.DataDir)
 	cfg.ExportDir = GetEnv("EXPORT_DIR", cfg.ExportDir)
@@ -55,6 +69,37 @@ func ApplyEnvironmentOverrides(cfg *Config) {
 	cfg.ValidationWorkers = GetEnvInt("DEFAULT_VALIDATION_WORKERS", cfg.ValidationWorkers)
 	cfg.TransformWorkers = GetEnvInt("DEFAULT_TRANSFORM_WORKERS", cfg.TransformWorkers)
 	cfg.BufferSize = GetEnvInt("DEFAULT_BUFFER_SIZE", cfg.BufferSize)
+}
+
+func syncServerAddress(cfg *Config) {
+	addrEnv := GetEnvFirst([]string{"ADDR", "SERVER_ADDR"}, "")
+	portEnv := GetEnvFirst([]string{"PORT", "SERVER_PORT"}, "")
+
+	if addrEnv != "" && portEnv == "" {
+		if _, p, err := net.SplitHostPort(cfg.ServerAddr); err == nil && p != "" {
+			cfg.ServerPort = p
+		} else if strings.HasPrefix(cfg.ServerAddr, ":") {
+			cfg.ServerPort = strings.TrimPrefix(cfg.ServerAddr, ":")
+		}
+	} else if portEnv != "" && addrEnv == "" {
+		if host, _, err := net.SplitHostPort(cfg.ServerAddr); err == nil {
+			cfg.ServerAddr = net.JoinHostPort(host, cfg.ServerPort)
+		} else {
+			cfg.ServerAddr = ":" + cfg.ServerPort
+		}
+	} else if cfg.ServerAddr == ":8080" && cfg.ServerPort != "8080" {
+		cfg.ServerAddr = ":" + cfg.ServerPort
+	}
+}
+
+// GetEnvFirst retrieves the first set environment variable from keys or falls back to defaultVal.
+func GetEnvFirst(keys []string, defaultVal string) string {
+	for _, key := range keys {
+		if val := strings.TrimSpace(os.Getenv(key)); val != "" {
+			return val
+		}
+	}
+	return defaultVal
 }
 
 // GetEnv retrieves a string environment variable with fallback default.

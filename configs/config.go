@@ -13,6 +13,8 @@ import (
 type Config struct {
 	ServerPort            string        `json:"server_port"`
 	ServerAddr            string        `json:"server_addr"`
+	APIBaseURL            string        `json:"api_base_url"`
+	APIBasePath           string        `json:"api_base_path"`
 	APIKey                string        `json:"api_key"`
 	DataDir               string        `json:"data_dir"`
 	ExportDir             string        `json:"export_dir"`

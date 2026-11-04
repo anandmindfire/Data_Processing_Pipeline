@@ -69,7 +69,7 @@ func NewServer(cfg *configs.Config, ctrl *controllers.PipelineController) *Serve
 	r.Get("/swagger", routes.RedirectToDocs)
 	r.Get("/swagger/", routes.RedirectToDocs)
 
-	routes.RegisterRoutes(r, ctrl)
+	routes.RegisterRoutes(r, ctrl, cfg.APIBasePath)
 
 	return &Server{
 		config:     cfg,

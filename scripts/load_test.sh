@@ -4,7 +4,9 @@
 # ==============================================================================
 set -euo pipefail
 
-BASE_URL="${BASE_URL:-http://localhost:8080}"
+PORT="${PORT:-8080}"
+BASE_URL="${API_BASE_URL:-${BASE_URL:-http://localhost:${PORT}}}"
+API_PATH="${API_BASE_PATH:-/api/v1}"
 CONCURRENCY="${CONCURRENCY:-5}"
 ITERATIONS="${ITERATIONS:-20}"
 OUTPUT_DIR="${OUTPUT_DIR:-/tmp/pipeline_load_test}"
@@ -67,7 +69,7 @@ SUBMIT_JOB() {
     local index=$1
     local payload="${JOB_PAYLOAD//\$ID/$index}"
     local code
-    code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL/api/v1/pipelines" \
+    code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE_URL$API_PATH/pipelines" \
         -H "Content-Type: application/json" \
         -d "$payload")
     if [ "$code" = "202" ]; then
@@ -77,7 +79,7 @@ SUBMIT_JOB() {
     fi
 }
 export -f SUBMIT_JOB
-export BASE_URL JOB_PAYLOAD
+export BASE_URL API_PATH JOB_PAYLOAD
 
 RESULTS_FILE="$OUTPUT_DIR/results.txt"
 rm -f "$RESULTS_FILE"

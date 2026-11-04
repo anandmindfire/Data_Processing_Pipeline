@@ -37,7 +37,7 @@ func BuildRouter(deps *Dependencies) http.Handler {
 	r.Get("/swagger/", routes.RedirectToDocs)
 
 	// API Routes
-	routes.RegisterRoutes(r, deps.Controller)
+	routes.RegisterRoutes(r, deps.Controller, deps.Config.APIBasePath)
 
 	return r
 }

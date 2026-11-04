@@ -289,6 +289,9 @@ The server implements 12-factor configuration loading default JSON configuration
 | :--- | :--- | :--- | :--- |
 | `PORT` / `SERVER_PORT` | string | `8080` | Port for the HTTP server to listen on |
 | `ADDR` / `SERVER_ADDR` | string | `:8080` | Host and port address string |
+| `API_BASE_URL` / `BASE_URL` | string | `http://localhost:8080` | Base URL used by clients, health probes, and API docs |
+| `API_BASE_PATH` / `API_PREFIX` | string | `/api/v1` | Routing prefix path for pipeline REST endpoints |
+| `API_KEY` | string | `""` | Optional secret token for Bearer/X-API-Key authentication |
 | `DATA_DIR` | string | `data` | Directory where persistent job state is saved |
 | `EXPORT_DIR` | string | `exports` | Directory for generated CSV/JSON/SQL output files |
 | `MAX_ACTIVE_JOBS` | int | `10` | Maximum number of concurrent running jobs |

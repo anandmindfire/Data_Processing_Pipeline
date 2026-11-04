@@ -2,19 +2,31 @@ package routes
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/anandmindfire/data-processing-pipeline/internal/api/controllers"
 	"github.com/go-chi/chi/v5"
 )
 
 // RegisterRoutes attaches pipeline routes to the provided chi router.
-func RegisterRoutes(r chi.Router, ctrl *controllers.PipelineController) {
+// An optional basePath parameter configures the API route prefix (default: "/api/v1").
+func RegisterRoutes(r chi.Router, ctrl *controllers.PipelineController, basePath ...string) {
 	// Observability
 	r.Get("/healthz", ctrl.Health)
 	r.Get("/metrics", ctrl.Metrics)
 
-	// Pipeline API v1
-	r.Route("/api/v1/pipelines", func(r chi.Router) {
+	base := "/api/v1"
+	if len(basePath) > 0 && strings.TrimSpace(basePath[0]) != "" {
+		base = strings.TrimSpace(basePath[0])
+	}
+	base = "/" + strings.Trim(base, "/")
+	pipelinePath := base + "/pipelines"
+	if base == "/" {
+		pipelinePath = "/pipelines"
+	}
+
+	// Pipeline API
+	r.Route(pipelinePath, func(r chi.Router) {
 		r.Post("/", ctrl.Create)
 		r.Get("/", ctrl.List)
 

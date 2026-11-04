@@ -2,11 +2,13 @@
 # Trigger a sample pipeline execution against the running local server
 set -euo pipefail
 
-SERVER_URL="${SERVER_URL:-http://localhost:8080}"
+PORT="${PORT:-8080}"
+SERVER_URL="${API_BASE_URL:-${SERVER_URL:-http://localhost:${PORT}}}"
+API_PATH="${API_BASE_PATH:-/api/v1}"
 
-echo "Submitting sample pipeline job to ${SERVER_URL}..."
+echo "Submitting sample pipeline job to ${SERVER_URL}${API_PATH}..."
 
-curl -s -X POST "${SERVER_URL}/api/v1/pipelines" \
+curl -s -X POST "${SERVER_URL}${API_PATH}/pipelines" \
   -H "Content-Type: application/json" \
   -d '{
     "sources": [

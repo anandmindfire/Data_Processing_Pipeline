@@ -53,6 +53,9 @@ func NewApp() (*App, error) {
 func (a *App) Start() {
 	slog.Info("server listening",
 		"addr", a.Config.ServerAddr,
+		"port", a.Config.ServerPort,
+		"api_base_url", a.Config.APIBaseURL,
+		"api_base_path", a.Config.APIBasePath,
 		"data_dir", a.Config.DataDir,
 		"export_dir", a.Config.ExportDir,
 		"max_active_jobs", a.Config.MaxActiveJobs,

@@ -68,3 +68,38 @@ func TestConfigsFileLoading(t *testing.T) {
 		t.Fatalf("expected 42 from file, got %d", cfg.MaxActiveJobs)
 	}
 }
+
+func TestAPIBaseURLAndPortConfig(t *testing.T) {
+	t.Run("explicit port derives address and base url", func(t *testing.T) {
+		_ = os.Setenv("PORT", "9095")
+		defer func() { _ = os.Unsetenv("PORT") }()
+
+		cfg := Load()
+		if cfg.ServerPort != "9095" {
+			t.Errorf("expected ServerPort 9095, got %s", cfg.ServerPort)
+		}
+		if cfg.ServerAddr != ":9095" {
+			t.Errorf("expected ServerAddr :9095, got %s", cfg.ServerAddr)
+		}
+		if cfg.APIBaseURL != "http://localhost:9095" {
+			t.Errorf("expected APIBaseURL http://localhost:9095, got %s", cfg.APIBaseURL)
+		}
+	})
+
+	t.Run("explicit api base url and prefix override", func(t *testing.T) {
+		_ = os.Setenv("API_BASE_URL", "https://api.example.com")
+		_ = os.Setenv("API_BASE_PATH", "v2/custom")
+		defer func() {
+			_ = os.Unsetenv("API_BASE_URL")
+			_ = os.Unsetenv("API_BASE_PATH")
+		}()
+
+		cfg := Load()
+		if cfg.APIBaseURL != "https://api.example.com" {
+			t.Errorf("expected APIBaseURL https://api.example.com, got %s", cfg.APIBaseURL)
+		}
+		if cfg.APIBasePath != "/v2/custom" {
+			t.Errorf("expected APIBasePath /v2/custom, got %s", cfg.APIBasePath)
+		}
+	})
+}

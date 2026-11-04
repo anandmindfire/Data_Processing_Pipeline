@@ -7,6 +7,8 @@ func DefaultConfig() *Config {
 	return &Config{
 		ServerPort:            "8080",
 		ServerAddr:            ":8080",
+		APIBaseURL:            "http://localhost:8080",
+		APIBasePath:           "/api/v1",
 		DataDir:               "data",
 		ExportDir:             "exports",
 		MaxActiveJobs:         10,

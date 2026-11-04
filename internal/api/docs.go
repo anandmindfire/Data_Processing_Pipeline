@@ -1,8 +1,12 @@
 package api
 
 import (
+	"bytes"
 	_ "embed"
+	"fmt"
 	"net/http"
+	"os"
+	"strings"
 
 	pkgresponse "github.com/anandmindfire/data-processing-pipeline/pkg/response"
 )
@@ -61,7 +65,7 @@ func HandleSwaggerUI(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(swaggerUIHTML))
 }
 
-// HandleOpenAPISpec serves the raw OpenAPI v3.0 JSON specification.
+// HandleOpenAPISpec serves the raw OpenAPI v3.0 JSON specification with dynamic server URL resolution.
 func HandleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
@@ -70,13 +74,32 @@ func HandleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(openAPISpec)
-}
 
-func (s *Server) handleSwaggerUI(w http.ResponseWriter, r *http.Request) {
-	HandleSwaggerUI(w, r)
-}
+	baseURL := os.Getenv("API_BASE_URL")
+	if baseURL == "" {
+		baseURL = os.Getenv("BASE_URL")
+	}
+	if baseURL == "" && r != nil && r.Host != "" {
+		scheme := "http"
+		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+			scheme = "https"
+		}
+		baseURL = scheme + "://" + r.Host
+	}
 
-func (s *Server) handleOpenAPISpec(w http.ResponseWriter, r *http.Request) {
-	HandleOpenAPISpec(w, r)
+	spec := openAPISpec
+	if baseURL != "" {
+		spec = bytes.Replace(spec, []byte(`"url": "http://localhost:8080"`), fmt.Appendf(nil, `"url": %q`, baseURL), 1)
+	}
+
+	basePath := os.Getenv("API_BASE_PATH")
+	if basePath == "" {
+		basePath = os.Getenv("API_PREFIX")
+	}
+	if basePath != "" && basePath != "/api/v1" {
+		clean := "/" + strings.Trim(basePath, "/")
+		spec = bytes.ReplaceAll(spec, []byte(`"/api/v1/`), fmt.Appendf(nil, `"%s/`, clean))
+	}
+
+	_, _ = w.Write(spec)
 }

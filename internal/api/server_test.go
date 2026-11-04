@@ -11,8 +11,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anandmindfire/data-processing-pipeline/configs"
+	"github.com/anandmindfire/data-processing-pipeline/internal/api/controllers"
+	"github.com/anandmindfire/data-processing-pipeline/internal/export"
+	"github.com/anandmindfire/data-processing-pipeline/internal/ingestion"
+	"github.com/anandmindfire/data-processing-pipeline/internal/metrics"
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/pipeline"
+	"github.com/anandmindfire/data-processing-pipeline/internal/services"
 	"github.com/anandmindfire/data-processing-pipeline/internal/storage"
+	"github.com/anandmindfire/data-processing-pipeline/internal/transformation"
+	"github.com/anandmindfire/data-processing-pipeline/internal/validation"
 )
 
 func setupTestServer(t *testing.T) (*Server, *storage.Store, string) {
@@ -315,5 +324,61 @@ func TestAPIValidationErrors(t *testing.T) {
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+}
+
+func TestCustomAPIBasePathAndOpenAPIDynamicURL(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.New(filepath.Join(dir, "state"))
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	cfg := configs.DefaultConfig()
+	cfg.APIBasePath = "/api/v2"
+	cfg.APIBaseURL = "https://production.pipeline.io"
+	cfg.ExportDir = filepath.Join(dir, "exports")
+
+	repo := store.Repository()
+	pipe := pipeline.NewPipeline(
+		ingestion.NewReader(http.DefaultClient),
+		validation.NewValidator(),
+		transformation.NewTransformer(),
+		export.NewExporter(cfg.ExportDir),
+		repo,
+		metrics.GlobalCollector,
+	)
+	service := services.NewPipelineService(cfg, repo, pipe)
+	ctrl := controllers.NewPipelineController(service, cfg.MaxRequestBodyBytes)
+	srv := NewServer(cfg, ctrl)
+
+	// Custom route /api/v2/pipelines should match and return 200 OK
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/pipelines", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected /api/v2/pipelines to return 200, got %d", rec.Code)
+	}
+
+	// Verify OpenAPI spec dynamically reflects API_BASE_URL
+	_ = os.Setenv("API_BASE_URL", "https://production.pipeline.io")
+	_ = os.Setenv("API_BASE_PATH", "/api/v2")
+	defer func() {
+		_ = os.Unsetenv("API_BASE_URL")
+		_ = os.Unsetenv("API_BASE_PATH")
+	}()
+
+	specReq := httptest.NewRequest(http.MethodGet, "/docs/openapi.json", nil)
+	specRec := httptest.NewRecorder()
+	srv.ServeHTTP(specRec, specReq)
+	if specRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for openapi spec, got %d", specRec.Code)
+	}
+	specBody := specRec.Body.String()
+	if !strings.Contains(specBody, "https://production.pipeline.io") {
+		t.Errorf("expected openapi spec to contain custom base url, got %s", specBody[:200])
+	}
+	if !strings.Contains(specBody, "/api/v2/pipelines") {
+		t.Errorf("expected openapi spec to contain custom api base path /api/v2/pipelines, got %s", specBody[:200])
 	}
 }
