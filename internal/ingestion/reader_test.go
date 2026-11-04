@@ -43,6 +43,40 @@ func TestSourceReaderCSV(t *testing.T) {
 	}
 }
 
+func TestSourceReaderRemoteCSV(t *testing.T) {
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			csvBody := "country,cases,deaths\nUSA,100,2\nUK,50,1\n"
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(csvBody)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	reader := NewReader(client)
+	out := make(chan Item, 4)
+	src := models.Source{
+		Type: "csv",
+		Name: "remote-covid-csv",
+		URL:  "https://example.org/covid.csv",
+	}
+
+	if err := reader.Read(context.Background(), src, 0, out, nil); err != nil {
+		t.Fatalf("remote CSV read failed: %v", err)
+	}
+	close(out)
+
+	if len(out) != 2 {
+		t.Fatalf("expected 2 items from remote CSV, got %d", len(out))
+	}
+	item := <-out
+	if item.Record["country"] != "USA" || item.Record["cases"] != "100" {
+		t.Fatalf("unexpected record: %v", item.Record)
+	}
+}
+
 func TestSourceReaderHTTP(t *testing.T) {
 	client := &http.Client{
 		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
@@ -111,22 +145,15 @@ func TestSourceReaderTable(t *testing.T) {
 			expectErr:     false,
 		},
 		{
-			name:          "Missing path error",
+			name:          "Missing path and URL error",
 			src:           models.Source{Type: "csv", Name: "err1"},
 			max:           0,
 			expectedCount: 0,
 			expectErr:     true,
 		},
 		{
-			name:          "Missing URL error",
-			src:           models.Source{Type: "http", Name: "err2"},
-			max:           0,
-			expectedCount: 0,
-			expectErr:     true,
-		},
-		{
-			name:          "Unsupported source type",
-			src:           models.Source{Type: "redis", Name: "err3"},
+			name:          "Unsupported source type without path or url",
+			src:           models.Source{Type: "unknown", Name: "err2"},
 			max:           0,
 			expectedCount: 0,
 			expectErr:     true,
@@ -150,4 +177,3 @@ func TestSourceReaderTable(t *testing.T) {
 		})
 	}
 }
-

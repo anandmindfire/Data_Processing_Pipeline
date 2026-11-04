@@ -39,4 +39,3 @@ func fetchHTTP(ctx context.Context, src models.Source, client *http.Client) (io.
 
 	return resp.Body, nil
 }
-

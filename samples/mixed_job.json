@@ -1,0 +1,79 @@
+{
+  "sources": [
+    {
+      "type": "csv",
+      "name": "internal-staff-csv",
+      "path": "samples/input.csv"
+    },
+    {
+      "type": "json",
+      "name": "contractors-json",
+      "path": "samples/input.json"
+    },
+    {
+      "type": "http",
+      "name": "remote-advisors-api",
+      "url": "https://api.example.com/v1/advisors",
+      "format": "json",
+      "headers": {
+        "Authorization": "Bearer token123",
+        "Accept": "application/json"
+      }
+    }
+  ],
+  "rules": [
+    {
+      "field": "name",
+      "type": "string",
+      "required": true,
+      "normalize": "trim"
+    },
+    {
+      "field": "department",
+      "type": "string",
+      "required": true,
+      "normalize": "lower"
+    },
+    {
+      "field": "salary",
+      "type": "number",
+      "required": true,
+      "min": 0
+    }
+  ],
+  "aggregations": [
+    {
+      "group_by": "department",
+      "field": "salary",
+      "operation": "count",
+      "name": "headcount"
+    },
+    {
+      "group_by": "department",
+      "field": "salary",
+      "operation": "sum",
+      "name": "total_payroll"
+    },
+    {
+      "group_by": "department",
+      "field": "salary",
+      "operation": "avg",
+      "name": "average_compensation"
+    }
+  ],
+  "exports": [
+    {
+      "type": "json",
+      "path": "exports/mixed_results.json"
+    },
+    {
+      "type": "csv",
+      "path": "exports/mixed_results.csv"
+    }
+  ],
+  "validation_workers": 4,
+  "transform_workers": 4,
+  "buffer_size": 128,
+  "timeout_seconds": 60
+}
+

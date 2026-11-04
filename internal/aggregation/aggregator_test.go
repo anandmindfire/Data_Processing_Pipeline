@@ -11,6 +11,8 @@ func TestMetricsAggregator(t *testing.T) {
 		{GroupBy: "dept", Field: "salary", Operation: "sum", Name: "dept_sum"},
 		{GroupBy: "dept", Field: "salary", Operation: "avg", Name: "dept_avg"},
 		{GroupBy: "dept", Field: "salary", Operation: "count", Name: "dept_count"},
+		{GroupBy: "dept", Field: "salary", Operation: "min", Name: "dept_min"},
+		{GroupBy: "dept", Field: "salary", Operation: "max", Name: "dept_max"},
 		{Field: "salary", Operation: "sum", Name: "total_sum"},
 	}
 
@@ -46,10 +48,19 @@ func TestMetricsAggregator(t *testing.T) {
 		t.Fatalf("unexpected dept_count: %v", deptCount)
 	}
 
-	// 4. Check total_sum
+	// 4. Check dept_min and dept_max
+	deptMin := res["dept_min"].(map[string]float64)
+	if deptMin["Engineering"] != 100.0 || deptMin["Sales"] != 150.0 {
+		t.Fatalf("unexpected dept_min: %v", deptMin)
+	}
+	deptMax := res["dept_max"].(map[string]float64)
+	if deptMax["Engineering"] != 200.0 || deptMax["Sales"] != 150.0 {
+		t.Fatalf("unexpected dept_max: %v", deptMax)
+	}
+
+	// 5. Check total_sum
 	totalSum := res["total_sum"].(map[string]float64)
 	if totalSum["_all"] != 450.0 {
 		t.Fatalf("unexpected total_sum: %v", totalSum)
 	}
 }
-

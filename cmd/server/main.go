@@ -24,6 +24,7 @@ import (
 
 func main() {
 	cfg := config.Load()
+	cfg.InitLogger()
 	if err := cfg.Validate(); err != nil {
 		slog.Error("invalid configuration", "error", err)
 		os.Exit(1)

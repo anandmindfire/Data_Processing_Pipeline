@@ -115,4 +115,3 @@ func (m *MemoryRepository) GetRecords(_ context.Context, jobID string) ([]models
 func (m *MemoryRepository) Close() error {
 	return nil
 }
-

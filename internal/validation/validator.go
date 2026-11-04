@@ -44,9 +44,10 @@ func validateFieldType(rule models.Rule, val any) error {
 	case "number":
 		return checkNumericRule(rule, val)
 	case "string":
-		return checkStringRule(rule.Field, val)
+		return checkStringRule(rule, val)
+	case "bool", "boolean":
+		return checkBooleanRule(rule, val)
 	default:
 		return nil
 	}
 }
-

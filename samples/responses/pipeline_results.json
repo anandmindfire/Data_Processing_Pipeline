@@ -1,0 +1,52 @@
+{
+  "job_id": "job-550e8400-e29b-41d4-a716-446655440000",
+  "status": "COMPLETED",
+  "records": [
+    {
+      "department": "engineering",
+      "name": "Alice",
+      "salary": 120000
+    },
+    {
+      "department": "sales",
+      "name": "Bob",
+      "salary": 90000
+    },
+    {
+      "department": "engineering",
+      "name": "Cara",
+      "salary": 135000
+    },
+    {
+      "department": "sales",
+      "name": "Dan",
+      "salary": 80000
+    },
+    {
+      "department": "engineering",
+      "name": "Fay",
+      "salary": 110000
+    },
+    {
+      "department": "sales",
+      "name": "Gus",
+      "salary": 95000
+    }
+  ],
+  "aggregations": {
+    "employee_count": {
+      "engineering": 3,
+      "sales": 3
+    },
+    "salary_average": {
+      "engineering": 121666.67,
+      "sales": 88333.33
+    },
+    "salary_total": {
+      "engineering": 365000,
+      "sales": 265000
+    }
+  },
+  "export_path": "exports/employees.json"
+}
+

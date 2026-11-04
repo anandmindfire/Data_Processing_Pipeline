@@ -52,4 +52,3 @@ func buildCSVRecord(headers []string, row []string) models.Record {
 	}
 	return record
 }
-

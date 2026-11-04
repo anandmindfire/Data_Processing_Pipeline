@@ -46,13 +46,33 @@ func TestRecordTransformerTable(t *testing.T) {
 			expectErr:     false,
 		},
 		{
-			name:   "Numeric multiplication",
+			name:   "String title normalization",
+			record: models.Record{"city": "new york city"},
+			rules: []models.Rule{
+				{Field: "city", Normalize: "title"},
+			},
+			expectedField: "city",
+			expectedVal:   "New York City",
+			expectErr:     false,
+		},
+		{
+			name:   "Numeric multiplication and addition",
 			record: models.Record{"price": "100"},
 			rules: []models.Rule{
-				{Field: "price", Type: "number", Multiply: 1.25},
+				{Field: "price", Type: "number", Multiply: 1.25, Add: 5.0},
 			},
 			expectedField: "price",
-			expectedVal:   125.0,
+			expectedVal:   130.0,
+			expectErr:     false,
+		},
+		{
+			name:   "Default value fallback when missing",
+			record: models.Record{"name": "Alice"},
+			rules: []models.Rule{
+				{Field: "status", Default: "active"},
+			},
+			expectedField: "status",
+			expectedVal:   "active",
 			expectErr:     false,
 		},
 		{
@@ -61,23 +81,49 @@ func TestRecordTransformerTable(t *testing.T) {
 			rules: []models.Rule{
 				{Field: "price", Type: "number", Multiply: 2.0},
 			},
-			expectErr: true,
+			expectedField: "price",
+			expectedVal:   nil,
+			expectErr:     true,
 		},
 	}
 
 	transformer := NewTransformer()
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := transformer.Transform(tc.record, tc.rules)
+			res, err := transformer.Transform(tc.record, tc.rules)
 			if (err != nil) != tc.expectErr {
 				t.Fatalf("expected error: %v, got: %v", tc.expectErr, err)
 			}
-			if !tc.expectErr {
-				if got[tc.expectedField] != tc.expectedVal {
-					t.Fatalf("expected field %s to be %v, got: %v", tc.expectedField, tc.expectedVal, got[tc.expectedField])
-				}
+			if !tc.expectErr && res[tc.expectedField] != tc.expectedVal {
+				t.Fatalf("expected %v, got %v", tc.expectedVal, res[tc.expectedField])
 			}
 		})
 	}
 }
 
+func TestTransformerImmutability(t *testing.T) {
+	transformer := NewTransformer()
+	original := models.Record{"city": "  Denver  ", "count": "10"}
+	rules := []models.Rule{
+		{Field: "city", Normalize: "trim"},
+		{Field: "count", Type: "number", Multiply: 2.0},
+	}
+
+	transformed, err := transformer.Transform(original, rules)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if original["city"] != "  Denver  " {
+		t.Fatalf("original record was mutated: city = %v", original["city"])
+	}
+	if original["count"] != "10" {
+		t.Fatalf("original record was mutated: count = %v", original["count"])
+	}
+	if transformed["city"] != "Denver" {
+		t.Fatalf("transformed city mismatch: got %v", transformed["city"])
+	}
+	if transformed["count"] != 20.0 {
+		t.Fatalf("transformed count mismatch: got %v", transformed["count"])
+	}
+}

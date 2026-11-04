@@ -57,4 +57,3 @@ func applyDefaults(cfg *models.Config) {
 		cfg.TimeoutSeconds = 300
 	}
 }
-

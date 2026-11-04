@@ -32,4 +32,3 @@ type Progress struct {
 	RecordsPerSecond float64                  `json:"records_per_second"`
 	StageLatency     map[string]time.Duration `json:"stage_latency_ns"`
 }
-

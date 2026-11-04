@@ -1,0 +1,103 @@
+{
+  "id": "job-550e8400-e29b-41d4-a716-446655440000",
+  "status": "COMPLETED",
+  "config": {
+    "sources": [
+      {
+        "type": "csv",
+        "name": "employees-csv",
+        "path": "samples/input.csv"
+      },
+      {
+        "type": "json",
+        "name": "employees-json",
+        "path": "samples/input.json"
+      }
+    ],
+    "rules": [
+      {
+        "field": "name",
+        "required": true,
+        "type": "string",
+        "normalize": "trim"
+      },
+      {
+        "field": "department",
+        "required": true,
+        "type": "string",
+        "normalize": "lower"
+      },
+      {
+        "field": "salary",
+        "required": true,
+        "type": "number",
+        "min": 0
+      }
+    ],
+    "aggregations": [
+      {
+        "group_by": "department",
+        "field": "salary",
+        "operation": "count",
+        "name": "employee_count"
+      },
+      {
+        "group_by": "department",
+        "field": "salary",
+        "operation": "sum",
+        "name": "salary_total"
+      },
+      {
+        "group_by": "department",
+        "field": "salary",
+        "operation": "avg",
+        "name": "salary_average"
+      }
+    ],
+    "exports": [
+      {
+        "type": "json",
+        "path": "exports/employees.json"
+      },
+      {
+        "type": "csv",
+        "path": "exports/employees.csv"
+      }
+    ]
+  },
+  "created_at": "2026-11-03T10:00:00Z",
+  "updated_at": "2026-11-03T10:00:02Z",
+  "metrics": {
+    "discovered": 7,
+    "processed": 6,
+    "valid": 6,
+    "rejected": 1,
+    "exported": 6,
+    "errors": 1,
+    "started_at": "2026-11-03T10:00:00.050Z",
+    "ended_at": "2026-11-03T10:00:01.850Z",
+    "records_per_second": 3.33,
+    "stage_latency_ns": {
+      "aggregation": 152000,
+      "export": 2450000,
+      "transformation": 310000,
+      "validation": 420000
+    }
+  },
+  "results_path": "exports/employees.json",
+  "aggregates": {
+    "employee_count": {
+      "engineering": 3,
+      "sales": 3
+    },
+    "salary_average": {
+      "engineering": 121666.67,
+      "sales": 88333.33
+    },
+    "salary_total": {
+      "engineering": 365000,
+      "sales": 265000
+    }
+  }
+}
+

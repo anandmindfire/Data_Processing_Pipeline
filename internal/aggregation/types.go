@@ -9,4 +9,3 @@ func BuildAggKey(a models.Aggregation) string {
 	}
 	return a.Operation + "_" + a.Field
 }
-

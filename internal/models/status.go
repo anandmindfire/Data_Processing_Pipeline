@@ -10,4 +10,3 @@ const (
 	StatusFailed    JobStatus = "FAILED"
 	StatusCancelled JobStatus = "CANCELLED"
 )
-

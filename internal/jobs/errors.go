@@ -15,4 +15,3 @@ var (
 	// ErrCapacityReached is returned when active job quota is exceeded.
 	ErrCapacityReached = errors.New("system capacity reached: maximum concurrent jobs active")
 )
-

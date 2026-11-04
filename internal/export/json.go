@@ -17,4 +17,3 @@ func writeJSON(w io.Writer, records []models.Record) error {
 	}
 	return nil
 }
-

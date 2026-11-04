@@ -44,4 +44,3 @@ func extractHeaders(firstRecord models.Record) []string {
 	sort.Strings(headers)
 	return headers
 }
-

@@ -1,0 +1,20 @@
+{
+  "job_id": "job-550e8400-e29b-41d4-a716-446655440000",
+  "status": "RUNNING",
+  "percent_complete": 85.71,
+  "processed": 6,
+  "discovered": 7,
+  "pending": 1,
+  "valid": 6,
+  "rejected": 1,
+  "error_count": 1,
+  "started_at": "2026-11-03T10:00:00.050Z",
+  "ended_at": null,
+  "records_per_second": 3.82,
+  "stage_latency_ns": {
+    "aggregation": 152000,
+    "transformation": 310000,
+    "validation": 420000
+  }
+}
+

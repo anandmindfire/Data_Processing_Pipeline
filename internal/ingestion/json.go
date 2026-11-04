@@ -1,6 +1,7 @@
 package ingestion
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,41 +10,95 @@ import (
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
-// readJSON decodes either a JSON array of objects or a single JSON object.
+// readJSON decodes JSON records with streaming memory efficiency (arrays, objects, NDJSON).
 func readJSON(ctx context.Context, r io.Reader, max int, emit func(int, models.Record) error) error {
-	var raw json.RawMessage
-	if err := json.NewDecoder(r).Decode(&raw); err != nil {
-		return fmt.Errorf("decode json payload: %w", err)
+	br := bufio.NewReader(r)
+	firstByte, err := peekFirstNonWhitespace(br)
+	if err == io.EOF {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidFormat, err)
 	}
 
-	var array []map[string]any
-	if err := json.Unmarshal(raw, &array); err == nil {
-		return emitJSONArray(ctx, array, max, emit)
+	dec := json.NewDecoder(br)
+	if firstByte == '[' {
+		return streamJSONArray(ctx, dec, max, emit)
 	}
-
-	var single map[string]any
-	if err := json.Unmarshal(raw, &single); err == nil {
-		return emit(1, models.Record(single))
-	}
-
-	return fmt.Errorf("json must be an object or an array of objects")
+	return streamJSONObjects(ctx, dec, max, emit)
 }
 
-func emitJSONArray(ctx context.Context, arr []map[string]any, max int, emit func(int, models.Record) error) error {
-	for i, obj := range arr {
+func streamJSONArray(ctx context.Context, dec *json.Decoder, max int, emit func(int, models.Record) error) error {
+	// Consume opening '['
+	_, err := dec.Token()
+	if err != nil {
+		return fmt.Errorf("%w: read opening bracket: %w", ErrInvalidFormat, err)
+	}
+
+	idx := 0
+	for dec.More() {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		if max > 0 && i >= max {
+		if max > 0 && idx >= max {
 			break
 		}
-		if err := emit(i+1, models.Record(obj)); err != nil {
+
+		var rec map[string]any
+		if err := dec.Decode(&rec); err != nil {
+			return fmt.Errorf("%w: decode array item %d: %w", ErrInvalidFormat, idx+1, err)
+		}
+		idx++
+		if err := emit(idx, models.Record(rec)); err != nil {
+			return err
+		}
+	}
+
+	// Consume closing ']'
+	_, _ = dec.Token()
+	return nil
+}
+
+func streamJSONObjects(ctx context.Context, dec *json.Decoder, max int, emit func(int, models.Record) error) error {
+	idx := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		if max > 0 && idx >= max {
+			break
+		}
+
+		var rec map[string]any
+		if err := dec.Decode(&rec); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("%w: decode object %d: %w", ErrInvalidFormat, idx+1, err)
+		}
+		idx++
+		if err := emit(idx, models.Record(rec)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
+func peekFirstNonWhitespace(br *bufio.Reader) (byte, error) {
+	for {
+		b, err := br.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		if b != ' ' && b != '\t' && b != '\r' && b != '\n' {
+			_ = br.UnreadByte()
+			return b, nil
+		}
+	}
+}

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -10,7 +11,28 @@ import (
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
+type progressKind int
+
+const (
+	progressDiscovered progressKind = iota
+	progressProcessed
+	progressRejected
+	progressExported
+	progressError
+	progressLatency
+)
+
+type progressMsg struct {
+	kind     progressKind
+	count    int64
+	stage    string
+	duration time.Duration
+}
+
 // Execute runs the full pipeline for a job, publishing updates to storage.
+// It implements the full multi-stage channel topology:
+// recordsCh -> validatedCh -> transformedCh -> resultCh
+// with side channels: errorCh and progressCh.
 func (p *Pipeline) Execute(parent context.Context, job *models.Job, onUpdate func(*models.Job)) {
 	cfg := job.Config
 	applyDefaults(&cfg)
@@ -19,8 +41,7 @@ func (p *Pipeline) Execute(parent context.Context, job *models.Job, onUpdate fun
 	ctx, cancel := context.WithTimeout(parent, time.Duration(cfg.TimeoutSeconds)*time.Second)
 	defer cancel()
 
-	var stateMu sync.Mutex
-	ingestFailures := 0
+	slog.Info("pipeline job started", "job_id", job.ID, "sources_count", len(cfg.Sources))
 
 	job.Status = models.StatusRunning
 	job.Metrics.StartedAt = time.Now()
@@ -30,74 +51,137 @@ func (p *Pipeline) Execute(parent context.Context, job *models.Job, onUpdate fun
 		onUpdate(job)
 	}
 
-	recordLatency := func(stage string, d time.Duration) {
-		stateMu.Lock()
-		job.Metrics.StageLatency[stage] += d
-		stateMu.Unlock()
-		p.collector.ObserveStageLatency(stage, d)
-	}
-
-	// Channel graph initialization (bounded channels enforce backpressure)
+	// 1. Channel graph setup
 	rawCh := make(chan ingestion.Item, cfg.BufferSize)
 	validCh := make(chan ingestion.Item, cfg.BufferSize)
 	transformedCh := make(chan transformResult, cfg.BufferSize)
+	resultCh := make(chan models.Record, cfg.BufferSize)
 	errCh := make(chan models.RecordError, cfg.BufferSize)
+	progressCh := make(chan progressMsg, cfg.BufferSize*2)
 
-	// 1. Ingestion stage
-	p.runIngestion(ctx, cfg.Sources, cfg.MaxRecords, rawCh, errCh, job, &stateMu, &ingestFailures, recordLatency)
+	// 2. Start side-channel listener: Progress Tracking goroutine (sole owner of job.Metrics)
+	var progressWG sync.WaitGroup
+	progressWG.Add(1)
+	go func() {
+		defer progressWG.Done()
+		for msg := range progressCh {
+			switch msg.kind {
+			case progressDiscovered:
+				job.Metrics.Discovered += msg.count
+			case progressProcessed:
+				job.Metrics.Processed += msg.count
+				job.Metrics.Valid += msg.count
+			case progressRejected:
+				job.Metrics.Rejected += msg.count
+			case progressExported:
+				job.Metrics.Exported += msg.count
+			case progressError:
+				job.Metrics.Errors += msg.count
+			case progressLatency:
+				job.Metrics.StageLatency[msg.stage] += msg.duration
+				p.collector.ObserveStageLatency(msg.stage, msg.duration)
+			}
+		}
+	}()
 
-	// 2. Validation stage
+	// 3. Start side-channel listener: Centralized Error Collection goroutine
+	var errWG sync.WaitGroup
+	errWG.Add(1)
+	go func() {
+		defer errWG.Done()
+		for er := range errCh {
+			_ = p.storage.AddError(ctx, job.ID, er)
+			progressCh <- progressMsg{kind: progressError, count: 1}
+			if er.Stage == "validation" || er.Stage == "transform" {
+				progressCh <- progressMsg{kind: progressRejected, count: 1}
+			}
+		}
+	}()
+
+	// 4. Ingestion Stage: goroutine per source -> sends to rawCh (recordsCh)
+	ingestFailures := p.startIngestion(ctx, cfg, rawCh, progressCh, errCh)
+
+	// 5. Validation Stage: worker pool fan-out -> sends to validCh
+	recordLatency := func(stage string, d time.Duration) {
+		progressCh <- progressMsg{kind: progressLatency, stage: stage, duration: d}
+	}
 	validatorWG := startValidationWorkers(ctx, cfg.ValidationWorkers, p.validator, cfg.Rules, rawCh, validCh, errCh, recordLatency)
 	go func() {
 		validatorWG.Wait()
 		close(validCh)
 	}()
 
-	// 3. Transformation stage
+	// 6. Transformation Stage: worker pool fan-out -> sends to transformedCh
 	transformWG := startTransformationWorkers(ctx, cfg.TransformWorkers, p.transformer, cfg.Rules, validCh, transformedCh, errCh, recordLatency)
 	go func() {
 		transformWG.Wait()
 		close(transformedCh)
 	}()
 
-	// 4. Aggregation & Error collection stages
+	// 7. Aggregation Stage: single fan-in goroutine -> accumulates & forwards to resultCh
 	agg := aggregation.NewAggregator(cfg.Aggregations)
-	p.consumeAndPersist(ctx, agg, transformedCh, errCh, job, &stateMu, recordLatency)
+	p.runAggregationAndExport(ctx, job, agg, transformedCh, resultCh, progressCh)
 
-	// Finalize status, export, and telemetry
-	p.completeJob(ctx, parent, job, agg, cfg.Exports, ingestFailures, &stateMu)
+	// Perform file exports
+	exportStart := time.Now()
+	exportedRecords, _ := p.storage.GetRecords(ctx, job.ID)
+	primaryPath, expErr := p.exporter.Export(exportedRecords, cfg.Exports, job.ID)
+	progressCh <- progressMsg{kind: progressLatency, stage: "export", duration: time.Since(exportStart)}
+	if expErr != nil {
+		slog.Error("pipeline export failed", "job_id", job.ID, "error", expErr)
+		errCh <- models.RecordError{Stage: "export", Message: expErr.Error(), At: time.Now()}
+	} else {
+		job.ResultsPath = primaryPath
+		progressCh <- progressMsg{kind: progressExported, count: int64(len(exportedRecords))}
+	}
+
+	// Close errorCh and progressCh after all stages are complete
+	close(errCh)
+	errWG.Wait()
+
+	close(progressCh)
+	progressWG.Wait()
+
+	// 8. Finalize job status and metrics
+	p.finalizeJob(ctx, parent, job, agg, expErr, ingestFailures)
+	slog.Info("pipeline job finished",
+		"job_id", job.ID,
+		"status", job.Status,
+		"processed", job.Metrics.Processed,
+		"valid", job.Metrics.Valid,
+		"rejected", job.Metrics.Rejected,
+		"errors", job.Metrics.Errors,
+	)
 	if onUpdate != nil {
 		onUpdate(job)
 	}
 }
 
-func (p *Pipeline) runIngestion(
+func (p *Pipeline) startIngestion(
 	ctx context.Context,
-	sources []models.Source,
-	max int,
+	cfg models.Config,
 	rawCh chan<- ingestion.Item,
+	progressCh chan<- progressMsg,
 	errCh chan<- models.RecordError,
-	job *models.Job,
-	mu *sync.Mutex,
-	ingestFailures *int,
-	recordLatency func(string, time.Duration),
-) {
-	var wg sync.WaitGroup
-	for _, src := range sources {
+) int {
+	var ingestMu sync.Mutex
+	ingestFailures := 0
+	var sourceWG sync.WaitGroup
+
+	for _, src := range cfg.Sources {
 		s := src
-		wg.Add(1)
+		sourceWG.Add(1)
 		go func() {
-			defer wg.Done()
+			defer sourceWG.Done()
 			start := time.Now()
-			err := p.reader.Read(ctx, s, max, rawCh, func() {
-				mu.Lock()
-				job.Metrics.Discovered++
-				mu.Unlock()
+			err := p.reader.Read(ctx, s, cfg.MaxRecords, rawCh, func() {
+				progressCh <- progressMsg{kind: progressDiscovered, count: 1}
 			})
 			if err != nil && ctx.Err() == nil {
-				mu.Lock()
-				*ingestFailures++
-				mu.Unlock()
+				ingestMu.Lock()
+				ingestFailures++
+				ingestMu.Unlock()
+				slog.Warn("source ingestion failed", "source", s.Name, "error", err)
 				errCh <- models.RecordError{
 					Source:  s.Name,
 					Stage:   "ingest",
@@ -105,106 +189,84 @@ func (p *Pipeline) runIngestion(
 					At:      time.Now(),
 				}
 			}
-			recordLatency("ingestion", time.Since(start))
+			progressCh <- progressMsg{kind: progressLatency, stage: "ingestion", duration: time.Since(start)}
 		}()
 	}
+
 	go func() {
-		wg.Wait()
+		sourceWG.Wait()
 		close(rawCh)
 	}()
+
+	return ingestFailures
 }
 
-func (p *Pipeline) consumeAndPersist(
+func (p *Pipeline) runAggregationAndExport(
 	ctx context.Context,
+	job *models.Job,
 	agg aggregation.Aggregator,
 	transformedCh <-chan transformResult,
-	errCh chan models.RecordError,
-	job *models.Job,
-	mu *sync.Mutex,
-	recordLatency func(string, time.Duration),
+	resultCh chan models.Record,
+	progressCh chan<- progressMsg,
 ) {
 	var aggWG sync.WaitGroup
 	aggWG.Add(1)
 	go func() {
 		defer aggWG.Done()
+		defer close(resultCh)
 		for item := range transformedCh {
 			start := time.Now()
-			_ = p.storage.SaveRecord(ctx, job.ID, item.record)
-			mu.Lock()
-			job.Metrics.Processed++
-			job.Metrics.Valid++
-			mu.Unlock()
-
 			agg.Process(item.record)
-			recordLatency("aggregation", time.Since(start))
+			progressCh <- progressMsg{kind: progressLatency, stage: "aggregation", duration: time.Since(start)}
+
+			select {
+			case resultCh <- item.record:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 
-	var errWG sync.WaitGroup
-	errWG.Add(1)
+	var exportWG sync.WaitGroup
+	exportWG.Add(1)
 	go func() {
-		defer errWG.Done()
-		for er := range errCh {
-			_ = p.storage.AddError(ctx, job.ID, er)
-			mu.Lock()
-			job.Metrics.Errors++
-			if er.Stage == "validation" || er.Stage == "transform" {
-				job.Metrics.Rejected++
-			}
-			mu.Unlock()
+		defer exportWG.Done()
+		for rec := range resultCh {
+			_ = p.storage.SaveRecord(ctx, job.ID, rec)
+			progressCh <- progressMsg{kind: progressProcessed, count: 1}
 		}
 	}()
 
 	aggWG.Wait()
-	close(errCh)
-	errWG.Wait()
+	exportWG.Wait()
 }
 
-func (p *Pipeline) completeJob(
+func (p *Pipeline) finalizeJob(
 	ctx context.Context,
 	parent context.Context,
 	job *models.Job,
 	agg aggregation.Aggregator,
-	exports []models.ExportTarget,
+	exportErr error,
 	ingestFailures int,
-	mu *sync.Mutex,
 ) {
 	if parent.Err() != nil {
 		job.Status = models.StatusCancelled
 		p.collector.IncJobsCancelled()
-	} else if ctx.Err() != nil {
+	} else if ctx.Err() != nil || exportErr != nil {
 		job.Status = models.StatusFailed
 		p.collector.IncJobsFailed()
 	} else {
 		job.Status = models.StatusCompleted
 	}
 
-	mu.Lock()
 	if job.Metrics.Discovered == 0 && ingestFailures > 0 {
 		job.Status = models.StatusFailed
 		p.collector.IncJobsFailed()
 	} else if job.Status == models.StatusCompleted {
 		p.collector.IncJobsCompleted()
 	}
-	mu.Unlock()
 
 	job.Aggregates = agg.Finalize()
-
-	// Export stage
-	records, _ := p.storage.GetRecords(ctx, job.ID)
-	primaryPath, expErr := p.exporter.Export(records, exports, job.ID)
-	if expErr != nil {
-		job.Status = models.StatusFailed
-		job.Metrics.Errors++
-		_ = p.storage.AddError(ctx, job.ID, models.RecordError{
-			Stage:   "export",
-			Message: expErr.Error(),
-			At:      time.Now(),
-		})
-	} else {
-		job.ResultsPath = primaryPath
-		job.Metrics.Exported = job.Metrics.Processed
-	}
 
 	now := time.Now()
 	job.Metrics.EndedAt = &now
@@ -221,4 +283,3 @@ func (p *Pipeline) completeJob(
 
 	_ = p.storage.SaveJob(ctx, job)
 }
-

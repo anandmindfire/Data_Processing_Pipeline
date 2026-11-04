@@ -66,4 +66,3 @@ func TestPipelineDirectExecution(t *testing.T) {
 		t.Fatalf("expected Eng sum 300, got %v", sums["Eng"])
 	}
 }
-

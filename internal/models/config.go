@@ -14,11 +14,14 @@ type Source struct {
 type Rule struct {
 	Field     string   `json:"field"`               // Field name
 	Required  bool     `json:"required,omitempty"`  // Must be non-empty if true
-	Type      string   `json:"type,omitempty"`      // "string", "number"
+	Type      string   `json:"type,omitempty"`      // "string", "number", "boolean"
 	Min       *float64 `json:"min,omitempty"`       // Minimum numeric threshold
 	Max       *float64 `json:"max,omitempty"`       // Maximum numeric threshold
-	Normalize string   `json:"normalize,omitempty"` // "trim", "lower", "upper"
+	Pattern   string   `json:"pattern,omitempty"`   // Regex pattern for validation
+	Normalize string   `json:"normalize,omitempty"` // "trim", "lower", "upper", "title"
 	Multiply  float64  `json:"multiply,omitempty"`  // Scaling factor for numeric values
+	Add       float64  `json:"add,omitempty"`       // Offset addition for numeric values
+	Default   any      `json:"default,omitempty"`   // Default fallback value if field is missing or empty
 }
 
 // Aggregation defines an aggregation to compute over processed records.
@@ -47,4 +50,3 @@ type Config struct {
 	TimeoutSeconds    int            `json:"timeout_seconds,omitempty"`
 	MaxRecords        int            `json:"max_records,omitempty"`
 }
-

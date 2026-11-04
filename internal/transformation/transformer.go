@@ -25,6 +25,12 @@ func (t *RecordTransformer) Transform(r models.Record, rules []models.Rule) (mod
 
 	for _, rule := range rules {
 		val, ok := out[rule.Field]
+		if (!ok || val == nil || val == "") && rule.Default != nil {
+			out[rule.Field] = rule.Default
+			val = rule.Default
+			ok = true
+		}
+
 		if !ok || val == nil {
 			continue
 		}
@@ -51,4 +57,3 @@ func cloneRecord(r models.Record) models.Record {
 	}
 	return cloned
 }
-

@@ -100,4 +100,3 @@ func TestFileRepository(t *testing.T) {
 		t.Fatalf("expected 0 jobs after deletion, got %d", len(jobs))
 	}
 }
-

@@ -49,13 +49,27 @@ func (a *MetricsAggregator) Process(r models.Record) {
 			continue
 		}
 
-		switch strings.ToLower(def.Operation) {
-		case "count":
-			a.aggregates[key][group]++
-		case "sum", "avg", "average":
-			a.aggregates[key][group] += v
-		}
+		a.applyOperation(key, group, def.Operation, v)
 		a.counts[key+"|"+group]++
+	}
+}
+
+func (a *MetricsAggregator) applyOperation(key, group, op string, v float64) {
+	switch strings.ToLower(op) {
+	case "count":
+		a.aggregates[key][group]++
+	case "sum", "avg", "average":
+		a.aggregates[key][group] += v
+	case "min":
+		curr, exists := a.aggregates[key][group]
+		if !exists || v < curr {
+			a.aggregates[key][group] = v
+		}
+	case "max":
+		curr, exists := a.aggregates[key][group]
+		if !exists || v > curr {
+			a.aggregates[key][group] = v
+		}
 	}
 }
 
@@ -78,4 +92,3 @@ func (a *MetricsAggregator) Finalize() map[string]any {
 	}
 	return results
 }
-
