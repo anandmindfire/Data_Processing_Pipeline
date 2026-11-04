@@ -31,3 +31,12 @@ func applyDefaultEnrichment(out models.Record, rule models.Rule) any {
 	}
 	return val
 }
+
+// convertBool converts truthy/falsy strings ("true", "1", "F", ...) into a bool.
+func convertBool(rule models.Rule, val any) (bool, error) {
+	b, ok := validation.ParseBool(val)
+	if !ok {
+		return false, fmt.Errorf("%w: field %q cannot be converted to boolean", ErrTransformationFailed, rule.Field)
+	}
+	return b, nil
+}

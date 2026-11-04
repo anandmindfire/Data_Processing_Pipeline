@@ -2,6 +2,8 @@ package test_test
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -14,9 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anandmindfire/data-processing-pipeline/configs"
-	"github.com/anandmindfire/data-processing-pipeline/internal/api"
 	"github.com/anandmindfire/data-processing-pipeline/internal/api/controllers"
+	"github.com/anandmindfire/data-processing-pipeline/internal/api/validator"
+	"github.com/anandmindfire/data-processing-pipeline/internal/bootstrap"
+	"github.com/anandmindfire/data-processing-pipeline/internal/config"
 	"github.com/anandmindfire/data-processing-pipeline/internal/export"
 	"github.com/anandmindfire/data-processing-pipeline/internal/ingestion"
 	"github.com/anandmindfire/data-processing-pipeline/internal/metrics"
@@ -26,6 +29,8 @@ import (
 	"github.com/anandmindfire/data-processing-pipeline/internal/storage"
 	"github.com/anandmindfire/data-processing-pipeline/internal/transformation"
 	"github.com/anandmindfire/data-processing-pipeline/internal/validation"
+	"go.uber.org/goleak"
+	_ "modernc.org/sqlite"
 )
 
 type mockTransport struct {
@@ -40,7 +45,7 @@ func TestEndToEndPipelineIntegration(t *testing.T) {
 	tempDir := t.TempDir()
 	csvFile, jsonFile, exportJSON, exportCSV, exportSQL, deadLetterPath := prepareIntegrationFiles(t, tempDir)
 
-	cfg := configs.Load()
+	cfg := config.Load()
 	cfg.MaxActiveJobs = 5
 	repo := storage.NewMemoryRepository()
 	collector := metrics.NewCollector()
@@ -53,8 +58,8 @@ func TestEndToEndPipelineIntegration(t *testing.T) {
 		collector,
 	)
 	service := services.NewPipelineService(cfg, repo, pipe)
-	ctrl := controllers.NewPipelineController(service, cfg.MaxRequestBodyBytes)
-	server := api.NewServer(cfg, ctrl)
+	server, cleanupServer := newServer(cfg, service, tempDir)
+	defer cleanupServer()
 
 	jobSpec := buildIntegrationJobSpec(csvFile, jsonFile, exportJSON, exportCSV, exportSQL, deadLetterPath)
 	jobID := submitIntegrationJob(t, server, jobSpec)
@@ -128,9 +133,10 @@ func buildIntegrationJobSpec(csvFile, jsonFile, exportJSON, exportCSV, exportSQL
 		Exports: []models.ExportTarget{
 			{Type: "json", Path: exportJSON},
 			{Type: "csv", Path: exportCSV},
-			{Type: "sqlite", Path: exportSQL},
+			{Type: "sql", Path: exportSQL},
+			{Type: "sqlite", Path: strings.TrimSuffix(exportSQL, ".sql") + ".db"},
 		},
-		DeadLetterPath:    deadLetterPath,
+		DLQPath:           deadLetterPath,
 		ValidationWorkers: 4,
 		TransformWorkers:  4,
 		BufferSize:        32,
@@ -228,7 +234,39 @@ func verifyIntegrationExports(t *testing.T, exportJSON, exportCSV, exportSQL, de
 	verifyJSONExportFile(t, exportJSON, 7)
 	verifyCSVExportFile(t, exportCSV, 8)
 	verifySQLExportFile(t, exportSQL)
+	verifySQLiteDatabase(t, strings.TrimSuffix(exportSQL, ".sql")+".db", 7)
 	verifyDeadLetterFile(t, deadLetterPath, "Eve")
+}
+
+// verifySQLiteDatabase opens the exported database through database/sql and checks its contents.
+func verifySQLiteDatabase(t *testing.T, path string, expectedRecords int) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM records`).Scan(&n); err != nil || n != expectedRecords {
+		t.Fatalf("expected %d rows in sqlite records table, got %d (err: %v)", expectedRecords, n, err)
+	}
+	var aggs int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM aggregations`).Scan(&aggs); err != nil || aggs == 0 {
+		t.Fatalf("expected aggregations table rows, got %d (err: %v)", aggs, err)
+	}
+}
+
+// newServer wires the production router around a custom service, sandboxed to dir.
+func newServer(cfg *config.Config, service *services.PipelineService, dir string) (http.Handler, func()) {
+	ctrl := controllers.NewPipelineController(service, cfg.MaxRequestBodyBytes, validator.DefaultPolicy(dir, dir))
+	deps := &bootstrap.Dependencies{Config: cfg, Service: service, Controller: ctrl}
+	router := bootstrap.BuildRouter(deps)
+	cleanup := func() {
+		if deps.Limiter != nil {
+			deps.Limiter.Close()
+		}
+	}
+	return router, cleanup
 }
 
 func verifyJSONExportFile(t *testing.T, path string, expectedCount int) {
@@ -318,9 +356,12 @@ func verifyIntegrationDelete(t *testing.T, server http.Handler, jobID string) {
 }
 
 func TestPipelineCancellation(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
 	tempDir := t.TempDir()
-	cfg := configs.Load()
+	cfg := config.Load()
 	repo := storage.NewMemoryRepository()
+	defer func() { _ = repo.Close() }()
 	collector := metrics.NewCollector()
 
 	// Slow reader that delays before returning records to allow cancellation test
@@ -328,7 +369,7 @@ func TestPipelineCancellation(t *testing.T) {
 		Transport: mockTransport{
 			roundTrip: func(req *http.Request) (*http.Response, error) {
 				select {
-				case <-time.After(2 * time.Second):
+				case <-time.After(5 * time.Second):
 					return &http.Response{
 						StatusCode: http.StatusOK,
 						Body:       io.NopCloser(strings.NewReader(`[{"name":"Slow","val":1}]`)),
@@ -350,8 +391,14 @@ func TestPipelineCancellation(t *testing.T) {
 		collector,
 	)
 	service := services.NewPipelineService(cfg, repo, pipe)
-	ctrl := controllers.NewPipelineController(service, cfg.MaxRequestBodyBytes)
-	server := api.NewServer(cfg, ctrl)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = service.Shutdown(ctx)
+	}()
+
+	server, cleanupServer := newServer(cfg, service, tempDir)
+	defer cleanupServer()
 
 	jobSpec := models.Config{
 		Sources: []models.Source{
@@ -382,8 +429,8 @@ func TestPipelineCancellation(t *testing.T) {
 
 	// Poll until context cancellation propagates
 	cancelled := false
-	for i := 0; i < 30; i++ {
-		time.Sleep(20 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
 		statusReq := httptest.NewRequest(http.MethodGet, "/api/v1/pipelines/"+job.ID, nil)
 		statusRec := httptest.NewRecorder()
 		server.ServeHTTP(statusRec, statusReq)
@@ -394,22 +441,144 @@ func TestPipelineCancellation(t *testing.T) {
 			cancelled = true
 			break
 		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if !cancelled {
 		t.Fatalf("job was not cancelled within timeout")
 	}
 }
 
+func TestPipelineMidRunProgress(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := config.Load()
+	repo := storage.NewMemoryRepository()
+	defer func() { _ = repo.Close() }()
+	collector := metrics.NewCollector()
+
+	proceed := make(chan struct{})
+	gateClient := &http.Client{
+		Transport: mockTransport{
+			roundTrip: func(req *http.Request) (*http.Response, error) {
+				select {
+				case <-proceed:
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader(`[{"name":"Alice","val":1},{"name":"Bob","val":2}]`)),
+						Header:     make(http.Header),
+					}, nil
+				case <-req.Context().Done():
+					return nil, req.Context().Err()
+				}
+			},
+		},
+	}
+
+	pipe := pipeline.NewPipeline(
+		ingestion.NewReader(gateClient),
+		validation.NewValidator(),
+		transformation.NewTransformer(),
+		export.NewExporter(tempDir),
+		repo,
+		collector,
+	)
+	service := services.NewPipelineService(cfg, repo, pipe)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = service.Shutdown(ctx)
+	}()
+
+	server, cleanupServer := newServer(cfg, service, tempDir)
+	defer cleanupServer()
+
+	jobSpec := models.Config{
+		Sources: []models.Source{
+			{Type: "http", Name: "gate-source", URL: "https://api.company.internal/gate", Format: "json"},
+		},
+		Exports: []models.ExportTarget{
+			{Type: "json", Path: filepath.Join(tempDir, "progress_out.json")},
+		},
+		TimeoutSeconds: 30,
+	}
+
+	body, _ := json.Marshal(jobSpec)
+	postReq := httptest.NewRequest(http.MethodPost, "/api/v1/pipelines", bytes.NewReader(body))
+	postRec := httptest.NewRecorder()
+	server.ServeHTTP(postRec, postReq)
+
+	var job models.Job
+	_ = json.Unmarshal(postRec.Body.Bytes(), &job)
+
+	// Verify mid-run progress polling while ingestion is paused
+	progReq := httptest.NewRequest(http.MethodGet, "/api/v1/pipelines/"+job.ID+"/progress", nil)
+	progRec := httptest.NewRecorder()
+	server.ServeHTTP(progRec, progReq)
+
+	if progRec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200 for progress mid-run, got %d: %s", progRec.Code, progRec.Body.String())
+	}
+
+	var midProgress models.Progress
+	if err := json.Unmarshal(progRec.Body.Bytes(), &midProgress); err != nil {
+		t.Fatalf("failed to parse mid-run progress JSON: %v", err)
+	}
+	if midProgress.JobID != job.ID {
+		t.Errorf("expected job ID %s, got %s", job.ID, midProgress.JobID)
+	}
+	if midProgress.Status != models.StatusRunning && midProgress.Status != models.StatusPending {
+		t.Errorf("expected running or pending mid-run status, got %s", midProgress.Status)
+	}
+
+	// Release ingestion and allow pipeline to finish
+	close(proceed)
+
+	deadline := time.Now().Add(3 * time.Second)
+	completed := false
+	for time.Now().Before(deadline) {
+		statusReq := httptest.NewRequest(http.MethodGet, "/api/v1/pipelines/"+job.ID, nil)
+		statusRec := httptest.NewRecorder()
+		server.ServeHTTP(statusRec, statusReq)
+
+		var updatedJob models.Job
+		_ = json.Unmarshal(statusRec.Body.Bytes(), &updatedJob)
+		if updatedJob.Status == models.StatusCompleted {
+			completed = true
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !completed {
+		t.Fatalf("job did not complete after releasing gate")
+	}
+
+	// Final progress check
+	finalProgReq := httptest.NewRequest(http.MethodGet, "/api/v1/pipelines/"+job.ID+"/progress", nil)
+	finalProgRec := httptest.NewRecorder()
+	server.ServeHTTP(finalProgRec, finalProgReq)
+	if finalProgRec.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200 for final progress, got %d", finalProgRec.Code)
+	}
+	var finalProgress models.Progress
+	_ = json.Unmarshal(finalProgRec.Body.Bytes(), &finalProgress)
+	if finalProgress.Status != models.StatusCompleted {
+		t.Errorf("expected completed final progress, got %s", finalProgress.Status)
+	}
+	if finalProgress.Processed != 2 {
+		t.Errorf("expected 2 processed records, got %d", finalProgress.Processed)
+	}
+}
+
 func TestPipelineFailedIngestion(t *testing.T) {
 	tempDir := t.TempDir()
-	cfg := configs.Load()
+	cfg := config.Load()
 	cfg.DataDir = filepath.Join(tempDir, "data")
 	cfg.ExportDir = filepath.Join(tempDir, "exports")
 
-	repo, err := storage.NewFileRepository(cfg.DataDir)
+	repo, err := storage.NewSQLiteRepository(context.Background(), cfg.DataDir)
 	if err != nil {
 		t.Fatalf("failed to create repo: %v", err)
 	}
+	defer repo.Close()
 
 	collector := metrics.NewCollector()
 	pipe := pipeline.NewPipeline(
@@ -421,8 +590,8 @@ func TestPipelineFailedIngestion(t *testing.T) {
 		collector,
 	)
 	service := services.NewPipelineService(cfg, repo, pipe)
-	ctrl := controllers.NewPipelineController(service, cfg.MaxRequestBodyBytes)
-	server := api.NewServer(cfg, ctrl)
+	server, cleanupServer := newServer(cfg, service, tempDir)
+	defer cleanupServer()
 
 	jobSpec := models.Config{
 		Sources: []models.Source{

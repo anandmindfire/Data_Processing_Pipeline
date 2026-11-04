@@ -32,7 +32,9 @@
   "paths": {
     "/api/v1/pipelines": {
       "post": {
-        "tags": ["Pipelines"],
+        "tags": [
+          "Pipelines"
+        ],
         "summary": "Submit and trigger a pipeline job",
         "description": "Submits a new data processing pipeline specification and begins asynchronous execution.",
         "operationId": "createPipelineJob",
@@ -126,7 +128,7 @@
             }
           },
           "400": {
-            "description": "Invalid JSON payload or validation error in job configuration",
+            "description": "Invalid spec: unknown type/operation, path outside INPUT_DIRS/EXPORT_DIR, or a limit exceeded. All problems are reported together.",
             "content": {
               "application/json": {
                 "schema": {
@@ -136,7 +138,14 @@
             }
           },
           "503": {
-            "description": "Server capacity reached (max concurrent active jobs running)",
+            "description": "Capacity reached (MAX_ACTIVE_JOBS) or server shutting down; retry later",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -148,9 +157,11 @@
         }
       },
       "get": {
-        "tags": ["Pipelines"],
+        "tags": [
+          "Pipelines"
+        ],
         "summary": "List all pipeline jobs",
-        "description": "Retrieves the full list of existing pipeline jobs, including status and summary metrics.",
+        "description": "Lists jobs newest first. The total number of matching jobs is returned in the X-Total-Count header.",
         "operationId": "listPipelineJobs",
         "responses": {
           "200": {
@@ -164,6 +175,14 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Total-Count": {
+                "description": "Total matching jobs",
+                "schema": {
+                  "type": "integer"
+                }
+              }
             }
           },
           "500": {
@@ -175,13 +194,53 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid paging or status parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/JobStatus"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          }
+        ]
       }
     },
     "/api/v1/pipelines/{id}": {
       "get": {
-        "tags": ["Pipelines"],
+        "tags": [
+          "Pipelines"
+        ],
         "summary": "Get pipeline job by ID",
         "description": "Retrieves details, configuration, status, and summary metrics for a specific pipeline job.",
         "operationId": "getPipelineJob",
@@ -221,7 +280,9 @@
         }
       },
       "delete": {
-        "tags": ["Pipelines"],
+        "tags": [
+          "Pipelines"
+        ],
         "summary": "Delete pipeline job and artifacts",
         "description": "Removes a completed, failed, or cancelled pipeline job, its quarantined errors, and on-disk records.",
         "operationId": "deletePipelineJob",
@@ -265,7 +326,9 @@
     },
     "/api/v1/pipelines/{id}/progress": {
       "get": {
-        "tags": ["Pipelines"],
+        "tags": [
+          "Pipelines"
+        ],
         "summary": "Get real-time job progress & telemetry",
         "description": "Returns processed counts, pending records, percent complete, processing rate (records/sec), and stage latencies.",
         "operationId": "getPipelineProgress",
@@ -306,7 +369,9 @@
     },
     "/api/v1/pipelines/{id}/results": {
       "get": {
-        "tags": ["Pipelines"],
+        "tags": [
+          "Pipelines"
+        ],
         "summary": "Get processed records and computed aggregates",
         "description": "Retrieves the valid processed records, group-by aggregation calculations, and export paths.",
         "operationId": "getPipelineResults",
@@ -318,6 +383,25 @@
             "description": "Unique identifier of the pipeline job",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
             }
           }
         ],
@@ -341,13 +425,25 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid paging parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
     },
     "/api/v1/pipelines/{id}/errors": {
       "get": {
-        "tags": ["Pipelines"],
+        "tags": [
+          "Pipelines"
+        ],
         "summary": "Get quarantined errors and rejected records",
         "description": "Retrieves quarantined corrupted records, stage diagnostics, and error messages for inspection.",
         "operationId": "getPipelineErrors",
@@ -359,6 +455,25 @@
             "description": "Unique identifier of the pipeline job",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
             }
           }
         ],
@@ -378,6 +493,15 @@
                       "items": {
                         "$ref": "#/components/schemas/RecordError"
                       }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
                     }
                   }
                 }
@@ -393,13 +517,25 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid paging parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
     },
     "/api/v1/pipelines/{id}/cancel": {
       "patch": {
-        "tags": ["Pipelines"],
+        "tags": [
+          "Pipelines"
+        ],
         "summary": "Cancel an active pipeline job",
         "description": "Triggers cooperative context cancellation, halting readers and worker pools promptly.",
         "operationId": "cancelPipelineJob",
@@ -443,13 +579,25 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "Job not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
     },
     "/metrics": {
       "get": {
-        "tags": ["Observability"],
+        "tags": [
+          "Observability"
+        ],
         "summary": "Prometheus text metrics",
         "description": "Exposes pipeline jobs, record counters, processing errors, and stage latency metrics in Prometheus text format (version 0.0.4).",
         "operationId": "getPrometheusMetrics",
@@ -469,7 +617,9 @@
     },
     "/healthz": {
       "get": {
-        "tags": ["Observability"],
+        "tags": [
+          "Observability"
+        ],
         "summary": "Kubernetes and container liveness probe",
         "description": "Returns HTTP 200 OK if the HTTP server is healthy and accepting traffic.",
         "operationId": "getHealthz",
@@ -498,17 +648,31 @@
     "schemas": {
       "JobStatus": {
         "type": "string",
-        "enum": ["PENDING", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"],
+        "enum": [
+          "PENDING",
+          "RUNNING",
+          "COMPLETED",
+          "FAILED",
+          "CANCELLED"
+        ],
         "example": "COMPLETED"
       },
       "Source": {
         "type": "object",
-        "required": ["type", "name"],
+        "required": [
+          "type",
+          "name"
+        ],
         "properties": {
           "type": {
             "type": "string",
             "description": "Protocol or format type",
-            "enum": ["csv", "json", "http", "api"],
+            "enum": [
+              "csv",
+              "json",
+              "http",
+              "api"
+            ],
             "example": "csv"
           },
           "name": {
@@ -518,12 +682,12 @@
           },
           "path": {
             "type": "string",
-            "description": "Local file path (for csv/json files)",
+            "description": "Local file path; must be inside one of the INPUT_DIRS directories (symlinks resolved).",
             "example": "samples/input.csv"
           },
           "url": {
             "type": "string",
-            "description": "Remote HTTP URL (for remote APIs or remote files)",
+            "description": "Remote http(s) URL. Private, loopback, link-local and cloud-metadata destinations are blocked at connection time.",
             "example": "https://api.example.com/v1/data"
           },
           "headers": {
@@ -542,7 +706,9 @@
       },
       "Rule": {
         "type": "object",
-        "required": ["field"],
+        "required": [
+          "field"
+        ],
         "properties": {
           "field": {
             "type": "string",
@@ -557,7 +723,12 @@
           "type": {
             "type": "string",
             "description": "Expected data type",
-            "enum": ["string", "number", "bool", "boolean"],
+            "enum": [
+              "string",
+              "number",
+              "bool",
+              "boolean"
+            ],
             "example": "number"
           },
           "min": {
@@ -578,7 +749,12 @@
           "normalize": {
             "type": "string",
             "description": "String normalization action",
-            "enum": ["trim", "lower", "upper", "title"],
+            "enum": [
+              "trim",
+              "lower",
+              "upper",
+              "title"
+            ],
             "example": "lower"
           },
           "multiply": {
@@ -598,7 +774,10 @@
       },
       "Aggregation": {
         "type": "object",
-        "required": ["field", "operation"],
+        "required": [
+          "field",
+          "operation"
+        ],
         "properties": {
           "group_by": {
             "type": "string",
@@ -613,7 +792,14 @@
           "operation": {
             "type": "string",
             "description": "Statistical aggregation operation",
-            "enum": ["count", "sum", "avg", "average", "min", "max"],
+            "enum": [
+              "count",
+              "sum",
+              "avg",
+              "average",
+              "min",
+              "max"
+            ],
             "example": "avg"
           },
           "name": {
@@ -625,23 +811,34 @@
       },
       "ExportTarget": {
         "type": "object",
-        "required": ["type"],
+        "required": [
+          "type"
+        ],
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["json", "csv", "sqlite", "sql"],
-            "example": "json"
+            "enum": [
+              "json",
+              "csv",
+              "sqlite",
+              "sql"
+            ],
+            "example": "json",
+            "description": "json (JSON array), csv (RFC 4180), sqlite (SQLite database file with records and aggregations tables), sql (portable SQL dump)"
           },
           "path": {
             "type": "string",
-            "description": "Destination file path",
+            "description": "Destination file inside EXPORT_DIR. Relative paths resolve inside the export directory; paths outside it are rejected with 400. Defaults to <EXPORT_DIR>/<job_id>.<ext>.",
             "example": "exports/summary.json"
           }
         }
       },
       "Config": {
         "type": "object",
-        "required": ["sources", "exports"],
+        "required": [
+          "sources",
+          "exports"
+        ],
         "properties": {
           "sources": {
             "type": "array",
@@ -670,32 +867,52 @@
           "validation_workers": {
             "type": "integer",
             "default": 4,
-            "example": 4
+            "example": 4,
+            "minimum": 0,
+            "maximum": 64,
+            "description": "Validation worker pool size (0 = server default, max MAX_WORKERS_PER_STAGE)"
           },
           "transform_workers": {
             "type": "integer",
             "default": 4,
-            "example": 4
+            "example": 4,
+            "minimum": 0,
+            "maximum": 64,
+            "description": "Transform worker pool size (0 = server default, max MAX_WORKERS_PER_STAGE)"
           },
           "buffer_size": {
             "type": "integer",
             "default": 64,
-            "example": 64
+            "example": 64,
+            "minimum": 0,
+            "maximum": 10000,
+            "description": "Inter-stage channel capacity (0 = server default, max MAX_BUFFER_SIZE)"
           },
           "timeout_seconds": {
             "type": "integer",
             "default": 300,
-            "example": 60
+            "example": 60,
+            "minimum": 0,
+            "maximum": 3600,
+            "description": "Job timeout (0 = DEFAULT_TIMEOUT_SECONDS, max MAX_JOB_TIMEOUT_SECONDS)"
           },
           "max_records": {
             "type": "integer",
-            "description": "Optional upper bound limit of records to process",
-            "example": 1000
+            "description": "Maximum records read per source (0 = unlimited)",
+            "example": 1000,
+            "minimum": 0
           },
-          "dead_letter_path": {
+          "dlq_path": {
             "type": "string",
-            "description": "Optional destination path for quarantined dead-letter records",
-            "example": "exports/dead_letter.json"
+            "description": "Optional dead-letter file (inside EXPORT_DIR) receiving every quarantined record as JSON. `dead_letter_path` is accepted as a deprecated alias.",
+            "example": "dlq.json"
+          },
+          "batch_size": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000,
+            "default": 500,
+            "description": "Records per storage transaction / export write"
           }
         }
       },
@@ -751,7 +968,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "example": "20261103T100000.000000000"
+            "example": "20261104T154047.892Z-6b84441b8f46"
           },
           "status": {
             "$ref": "#/components/schemas/JobStatus"
@@ -776,6 +993,18 @@
           },
           "aggregates": {
             "type": "object"
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every file published for the job (exports, aggregation sidecars, DLQ)"
+          },
+          "error": {
+            "type": "string",
+            "description": "Failure or cancellation reason for FAILED / CANCELLED jobs",
+            "example": "cancelled: cancelled by user request"
           }
         }
       },
@@ -784,14 +1013,15 @@
         "properties": {
           "job_id": {
             "type": "string",
-            "example": "20261103T100000.000000000"
+            "example": "20261104T154047.892Z-6b84441b8f46"
           },
           "status": {
             "$ref": "#/components/schemas/JobStatus"
           },
           "percent_complete": {
             "type": "number",
-            "example": 85.5
+            "example": 85.5,
+            "description": "(processed + rejected) / discovered. Sources are streamed, so discovered grows during ingestion; 100 once COMPLETED."
           },
           "processed": {
             "type": "integer",
@@ -826,6 +1056,19 @@
             "additionalProperties": {
               "type": "integer"
             }
+          },
+          "error": {
+            "type": "string",
+            "description": "Failure or cancellation reason"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Present once the job is finished"
           }
         }
       },
@@ -877,6 +1120,21 @@
           },
           "export_path": {
             "type": "string"
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "total_records": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
           }
         }
       },
@@ -892,4 +1150,3 @@
     }
   }
 }
-

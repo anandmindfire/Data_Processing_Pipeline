@@ -3,12 +3,14 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"sync"
 
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 // MemoryRepository provides a thread-safe in-memory implementation of Repository.
+// It is intended for tests and ephemeral runs; data is lost when the process exits.
 type MemoryRepository struct {
 	mu      sync.RWMutex
 	jobs    map[string]*models.Job
@@ -25,6 +27,7 @@ func NewMemoryRepository() *MemoryRepository {
 	}
 }
 
+// cloneJob deep-copies a job so callers never share maps or slices with the repository.
 func cloneJob(j *models.Job) *models.Job {
 	if j == nil {
 		return nil
@@ -37,9 +40,10 @@ func cloneJob(j *models.Job) *models.Job {
 
 // SaveJob inserts or updates a job.
 func (m *MemoryRepository) SaveJob(_ context.Context, job *models.Job) error {
+	c := cloneJob(job)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.jobs[job.ID] = cloneJob(job)
+	m.jobs[job.ID] = c
 	return nil
 }
 
@@ -54,15 +58,25 @@ func (m *MemoryRepository) GetJob(_ context.Context, id string) (*models.Job, bo
 	return cloneJob(j), true, nil
 }
 
-// ListJobs returns all stored jobs.
-func (m *MemoryRepository) ListJobs(_ context.Context) ([]models.Job, error) {
+// ListJobs returns matching jobs, newest first.
+func (m *MemoryRepository) ListJobs(_ context.Context, opts ListOptions) ([]models.Job, int, error) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make([]models.Job, 0, len(m.jobs))
+	all := make([]models.Job, 0, len(m.jobs))
 	for _, j := range m.jobs {
-		out = append(out, *cloneJob(j))
+		if opts.Status != "" && j.Status != opts.Status {
+			continue
+		}
+		all = append(all, *cloneJob(j))
 	}
-	return out, nil
+	m.mu.RUnlock()
+
+	sort.Slice(all, func(a, b int) bool {
+		if all[a].CreatedAt.Equal(all[b].CreatedAt) {
+			return all[a].ID > all[b].ID
+		}
+		return all[a].CreatedAt.After(all[b].CreatedAt)
+	})
+	return page(all, opts.Offset, opts.Limit), len(all), nil
 }
 
 // DeleteJob removes a job, its errors, and its records.
@@ -75,40 +89,36 @@ func (m *MemoryRepository) DeleteJob(_ context.Context, id string) error {
 	return nil
 }
 
-// AddError stores a record error for a job.
-func (m *MemoryRepository) AddError(_ context.Context, jobID string, err models.RecordError) error {
+// AddErrors appends record errors for a job.
+func (m *MemoryRepository) AddErrors(_ context.Context, jobID string, errs []models.RecordError) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.errors[jobID] = append(m.errors[jobID], err)
+	m.errors[jobID] = append(m.errors[jobID], errs...)
 	return nil
 }
 
-// GetErrors retrieves all errors recorded for a job.
-func (m *MemoryRepository) GetErrors(_ context.Context, jobID string) ([]models.RecordError, error) {
+// GetErrors retrieves a page of errors recorded for a job.
+func (m *MemoryRepository) GetErrors(_ context.Context, jobID string, offset, limit int) ([]models.RecordError, int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	list := m.errors[jobID]
-	out := make([]models.RecordError, len(list))
-	copy(out, list)
-	return out, nil
+	return page(list, offset, limit), len(list), nil
 }
 
-// SaveRecord stores a processed record for a job.
-func (m *MemoryRepository) SaveRecord(_ context.Context, jobID string, record models.Record) error {
+// SaveRecords appends processed records for a job.
+func (m *MemoryRepository) SaveRecords(_ context.Context, jobID string, records []models.Record) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.records[jobID] = append(m.records[jobID], record)
+	m.records[jobID] = append(m.records[jobID], records...)
 	return nil
 }
 
-// GetRecords retrieves all processed records for a job.
-func (m *MemoryRepository) GetRecords(_ context.Context, jobID string) ([]models.Record, error) {
+// GetRecords retrieves a page of processed records for a job.
+func (m *MemoryRepository) GetRecords(_ context.Context, jobID string, offset, limit int) ([]models.Record, int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	list := m.records[jobID]
-	out := make([]models.Record, len(list))
-	copy(out, list)
-	return out, nil
+	return page(list, offset, limit), len(list), nil
 }
 
 // Close is a no-op for in-memory storage.

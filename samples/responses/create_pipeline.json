@@ -1,17 +1,17 @@
 {
-  "id": "job-550e8400-e29b-41d4-a716-446655440000",
+  "id": "20261104T154047.892Z-6b84441b8f46",
   "status": "PENDING",
   "config": {
     "sources": [
       {
         "type": "csv",
         "name": "employees-csv",
-        "path": "samples/input.csv"
+        "path": "/app/samples/input.csv"
       },
       {
         "type": "json",
         "name": "employees-json",
-        "path": "samples/input.json"
+        "path": "/app/samples/input.json"
       }
     ],
     "rules": [
@@ -57,11 +57,11 @@
     "exports": [
       {
         "type": "json",
-        "path": "exports/employees.json"
+        "path": "/app/exports/employees.json"
       },
       {
         "type": "csv",
-        "path": "exports/employees.csv"
+        "path": "/app/exports/employees.csv"
       }
     ],
     "validation_workers": 4,
@@ -69,8 +69,8 @@
     "buffer_size": 64,
     "timeout_seconds": 60
   },
-  "created_at": "2026-11-03T10:00:00Z",
-  "updated_at": "2026-11-03T10:00:00Z",
+  "created_at": "2026-11-04T15:40:47.892636Z",
+  "updated_at": "2026-11-04T15:40:47.892636Z",
   "metrics": {
     "discovered": 0,
     "processed": 0,
@@ -78,8 +78,8 @@
     "rejected": 0,
     "exported": 0,
     "errors": 0,
+    "started_at": "0001-01-01T00:00:00Z",
     "records_per_second": 0,
     "stage_latency_ns": {}
   }
 }
-

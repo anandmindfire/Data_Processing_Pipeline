@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
@@ -18,15 +19,28 @@ type Reader interface {
 
 // SourceReader is the concrete implementation of Reader.
 type SourceReader struct {
-	client *http.Client
+	client       *http.Client
+	allowPrivate bool
 }
 
-// NewReader constructs a new SourceReader with the provided HTTP client.
-func NewReader(client *http.Client) *SourceReader {
-	if client == nil {
-		client = http.DefaultClient
+// ReaderOption customizes a SourceReader.
+type ReaderOption func(*SourceReader)
+
+// WithPrivateNetworks disables the private/loopback URL pre-check (for local development only).
+func WithPrivateNetworks(allow bool) ReaderOption {
+	return func(r *SourceReader) { r.allowPrivate = allow }
+}
+
+// NewReader constructs a SourceReader. When client is nil an SSRF-safe client is used.
+func NewReader(client *http.Client, opts ...ReaderOption) *SourceReader {
+	r := &SourceReader{client: client}
+	for _, opt := range opts {
+		opt(r)
 	}
-	return &SourceReader{client: client}
+	if r.client == nil {
+		r.client = NewSafeHTTPClient(30*time.Second, r.allowPrivate)
+	}
+	return r
 }
 
 // Read opens the source stream, parses records according to format, and emits Item instances.
@@ -64,7 +78,7 @@ func (r *SourceReader) Read(ctx context.Context, s models.Source, maxRecords int
 
 func (r *SourceReader) openStream(ctx context.Context, s models.Source) (io.ReadCloser, error) {
 	if s.URL != "" || strings.EqualFold(s.Type, "http") || strings.EqualFold(s.Type, "api") {
-		return fetchHTTP(ctx, s, r.client)
+		return fetchHTTP(ctx, s, r.client, r.allowPrivate)
 	}
 
 	if s.Path != "" {

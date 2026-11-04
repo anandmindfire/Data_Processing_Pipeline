@@ -127,3 +127,20 @@ func TestTransformerImmutability(t *testing.T) {
 		t.Fatalf("transformed count mismatch: got %v", transformed["count"])
 	}
 }
+
+func TestTransformConvertsTypes(t *testing.T) {
+	rules := []models.Rule{
+		{Field: "amount", Type: "number"},
+		{Field: "active", Type: "boolean"},
+	}
+	got, err := NewTransformer().Transform(models.Record{"amount": "42.5", "active": "true"}, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["amount"] != 42.5 || got["active"] != true {
+		t.Fatalf("expected typed values, got %#v", got)
+	}
+	if _, err := NewTransformer().Transform(models.Record{"active": "maybe"}, rules[1:]); err == nil {
+		t.Fatal("expected conversion error for non-boolean value")
+	}
+}

@@ -15,7 +15,9 @@ type PipelineResponse struct {
 	UpdatedAt   time.Time        `json:"updated_at"`
 	Metrics     models.Metrics   `json:"metrics"`
 	ResultsPath string           `json:"results_path,omitempty"`
+	Artifacts   []string         `json:"artifacts,omitempty"`
 	Aggregates  map[string]any   `json:"aggregates,omitempty"`
+	Error       string           `json:"error,omitempty"`
 }
 
 // FromJob maps a domain models.Job to PipelineResponse DTO.
@@ -31,6 +33,8 @@ func FromJob(j *models.Job) PipelineResponse {
 		UpdatedAt:   j.UpdatedAt,
 		Metrics:     j.Metrics,
 		ResultsPath: j.ResultsPath,
+		Artifacts:   j.Artifacts,
 		Aggregates:  j.Aggregates,
+		Error:       j.Error,
 	}
 }

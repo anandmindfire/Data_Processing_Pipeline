@@ -22,5 +22,13 @@ type Job struct {
 	UpdatedAt   time.Time      `json:"updated_at"`
 	Metrics     Metrics        `json:"metrics"`
 	ResultsPath string         `json:"results_path,omitempty"`
+	Artifacts   []string       `json:"artifacts,omitempty"` // every file written for the job (exports, sidecars, DLQ)
 	Aggregates  map[string]any `json:"aggregates,omitempty"`
+	Error       string         `json:"error,omitempty"` // terminal failure or cancellation reason
+
+}
+
+// IsTerminal reports whether the status is a final state.
+func (s JobStatus) IsTerminal() bool {
+	return s == StatusCompleted || s == StatusFailed || s == StatusCancelled
 }

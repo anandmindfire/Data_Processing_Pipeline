@@ -7,6 +7,7 @@ var (
 	ErrJobNotFound             = errors.New("pipeline job not found")
 	ErrJobStillRunning         = errors.New("cannot delete an actively running job; cancel it first")
 	ErrJobNotRunning           = errors.New("pipeline job is not running")
+	ErrShuttingDown            = errors.New("server is shutting down; not accepting new jobs")
 	ErrRequiredField           = errors.New("required field missing or empty")
 	ErrTypeMismatch            = errors.New("field type mismatch")
 	ErrNumericConstraint       = errors.New("value violates numeric constraint")

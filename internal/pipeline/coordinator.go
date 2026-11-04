@@ -2,16 +2,20 @@ package pipeline
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/anandmindfire/data-processing-pipeline/internal/aggregation"
+	"github.com/anandmindfire/data-processing-pipeline/internal/export"
 	"github.com/anandmindfire/data-processing-pipeline/internal/ingestion"
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
+// startIngestion launches one reader goroutine per source (fan-out) and closes rawCh when all finish.
 func (p *Pipeline) startIngestion(
 	ctx context.Context,
 	cfg models.Config,
@@ -53,67 +57,133 @@ func (p *Pipeline) startIngestion(
 	return &ingestFailures
 }
 
+// runAggregationAndExport runs the fan-in aggregation goroutine and the export goroutine.
+//
+// The export goroutine batches records and, per batch, persists them to the repository and
+// streams them to every export sink. It returns the first storage or sink error; after an error
+// it keeps draining so upstream stages can finish.
 func (p *Pipeline) runAggregationAndExport(
 	ctx context.Context,
-	job *models.Job,
+	jobID string,
+	batchSize int,
 	agg aggregation.Aggregator,
-	transformedCh <-chan transformResult,
-	resultCh chan models.Record,
-	progressCh chan<- progressMsg,
-) {
-	var aggWG sync.WaitGroup
-	aggWG.Add(1)
+	session export.Session,
+	ch *PipelineChannels,
+) error {
+	var wg sync.WaitGroup
+	wg.Add(2)
+
 	go func() {
-		defer aggWG.Done()
-		defer close(resultCh)
-		for item := range transformedCh {
+		defer wg.Done()
+		defer close(ch.Result)
+		lat := newLatencyAccumulator(ch.Progress, "aggregation")
+		defer lat.flush()
+		for item := range ch.Transformed {
 			start := time.Now()
 			agg.Process(item.record)
-			recordStageLatency(progressCh, "aggregation", time.Since(start))
+			lat.add(time.Since(start))
 
 			select {
-			case resultCh <- item.record:
+			case ch.Result <- item.record:
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
 
-	var exportWG sync.WaitGroup
-	exportWG.Add(1)
+	var exportErr error
 	go func() {
-		defer exportWG.Done()
-		for rec := range resultCh {
-			_ = p.storage.SaveRecord(ctx, job.ID, rec)
-			progressCh <- progressMsg{kind: progressProcessed, count: 1}
-		}
+		defer wg.Done()
+		exportErr = p.exportStage(ctx, jobID, batchSize, session, ch.Result, ch.Progress)
 	}()
 
-	aggWG.Wait()
-	exportWG.Wait()
+	wg.Wait()
+	return exportErr
 }
 
+func (p *Pipeline) exportStage(
+	ctx context.Context,
+	jobID string,
+	batchSize int,
+	session export.Session,
+	resultCh <-chan models.Record,
+	progressCh chan<- progressMsg,
+) error {
+	storeCtx := context.WithoutCancel(ctx)
+	batch := make([]models.Record, 0, batchSize)
+	var firstErr error
+
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		start := time.Now()
+		if err := p.storage.SaveRecords(storeCtx, jobID, batch); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("persist records: %w", err)
+		}
+		progressCh <- progressMsg{kind: progressProcessed, count: int64(len(batch))}
+		if firstErr == nil {
+			if err := session.Write(batch); err != nil {
+				firstErr = err
+			} else {
+				progressCh <- progressMsg{kind: progressExported, count: int64(len(batch))}
+			}
+		}
+		progressCh <- progressMsg{kind: progressLatency, stage: "export", duration: time.Since(start), count: int64(len(batch))}
+		batch = batch[:0]
+	}
+
+	ticker := time.NewTicker(p.flushInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case rec, ok := <-resultCh:
+			if !ok {
+				flush()
+				return firstErr
+			}
+			batch = append(batch, rec)
+			if len(batch) >= batchSize {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
+		}
+	}
+}
+
+// finalizeJob determines the terminal status, records the reason, and persists the final state.
 func (p *Pipeline) finalizeJob(
 	ctx context.Context,
 	parent context.Context,
 	job *models.Job,
-	agg aggregation.Aggregator,
+	aggregates map[string]any,
 	exportErr error,
 	ingestFailures int,
 ) {
 	switch {
 	case parent.Err() != nil:
 		job.Status = models.StatusCancelled
+		job.Error = "cancelled: " + context.Cause(parent).Error()
 		p.collector.IncJobsCancelled()
-	case ctx.Err() != nil || exportErr != nil || (job.Metrics.Discovered == 0 && ingestFailures > 0):
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		job.Status = models.StatusFailed
+		job.Error = timeoutError(job.Config.TimeoutSeconds).Error()
+		p.collector.IncJobsFailed()
+	case exportErr != nil:
+		job.Status = models.StatusFailed
+		job.Error = "export failed: " + exportErr.Error()
+		p.collector.IncJobsFailed()
+	case job.Metrics.Discovered == 0 && ingestFailures > 0:
+		job.Status = models.StatusFailed
+		job.Error = fmt.Sprintf("all %d source(s) failed to ingest; see errors endpoint", ingestFailures)
 		p.collector.IncJobsFailed()
 	default:
 		job.Status = models.StatusCompleted
 		p.collector.IncJobsCompleted()
 	}
 
-	job.Aggregates = agg.Finalize()
+	job.Aggregates = aggregates
 
 	now := time.Now()
 	job.Metrics.EndedAt = &now
@@ -121,8 +191,5 @@ func (p *Pipeline) finalizeJob(
 	job.UpdatedAt = now
 
 	publishCollectorMetrics(p.collector, job.Metrics)
-
-	saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer saveCancel()
-	_ = p.storage.SaveJob(saveCtx, job)
+	p.persist(job)
 }

@@ -44,21 +44,44 @@ func testSaveAndGetJob(t *testing.T, ctx context.Context, repo Repository, job *
 
 func testListJobs(t *testing.T, ctx context.Context, repo Repository) {
 	t.Helper()
-	jobs, err := repo.ListJobs(ctx)
-	if err != nil || len(jobs) != 1 {
-		t.Fatalf("ListJobs failed: count=%d, err=%v", len(jobs), err)
+	jobs, total, err := repo.ListJobs(ctx, ListOptions{})
+	if err != nil || len(jobs) != 1 || total != 1 {
+		t.Fatalf("ListJobs failed: count=%d total=%d, err=%v", len(jobs), total, err)
+	}
+
+	// Newest first, status filter, and pagination.
+	older := &models.Job{ID: "older", Status: models.StatusCompleted, CreatedAt: jobs[0].CreatedAt.Add(-time.Hour), UpdatedAt: time.Now()}
+	if err := repo.SaveJob(ctx, older); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = repo.DeleteJob(ctx, older.ID) }()
+	jobs, total, _ = repo.ListJobs(ctx, ListOptions{})
+	if total != 2 || jobs[0].ID != "contract-test-job" || jobs[1].ID != "older" {
+		t.Fatalf("expected newest-first ordering, got total=%d %+v", total, jobs)
+	}
+	jobs, total, _ = repo.ListJobs(ctx, ListOptions{Status: models.StatusCompleted})
+	if total != 1 || jobs[0].ID != "older" {
+		t.Fatalf("status filter failed: total=%d %+v", total, jobs)
+	}
+	jobs, total, _ = repo.ListJobs(ctx, ListOptions{Offset: 1, Limit: 1})
+	if total != 2 || len(jobs) != 1 || jobs[0].ID != "older" {
+		t.Fatalf("pagination failed: total=%d %+v", total, jobs)
 	}
 }
 
 func testSaveAndGetRecords(t *testing.T, ctx context.Context, repo Repository, jobID string) {
 	t.Helper()
-	rec := models.Record{"name": "Alice", "score": 95.5}
-	if err := repo.SaveRecord(ctx, jobID, rec); err != nil {
-		t.Fatalf("SaveRecord failed: %v", err)
+	batch := []models.Record{{"name": "Alice", "score": 95.5}, {"name": "Bob"}, {"name": "Cara"}}
+	if err := repo.SaveRecords(ctx, jobID, batch); err != nil {
+		t.Fatalf("SaveRecords failed: %v", err)
 	}
-	records, err := repo.GetRecords(ctx, jobID)
-	if err != nil || len(records) != 1 || records[0]["name"] != "Alice" {
-		t.Fatalf("GetRecords failed: %+v, err=%v", records, err)
+	records, total, err := repo.GetRecords(ctx, jobID, 0, 0)
+	if err != nil || total != 3 || len(records) != 3 || records[0]["name"] != "Alice" || records[0]["score"] != 95.5 {
+		t.Fatalf("GetRecords failed: %+v total=%d, err=%v", records, total, err)
+	}
+	records, total, _ = repo.GetRecords(ctx, jobID, 1, 1)
+	if total != 3 || len(records) != 1 || records[0]["name"] != "Bob" {
+		t.Fatalf("GetRecords paging failed: %+v total=%d", records, total)
 	}
 }
 
@@ -69,13 +92,14 @@ func testAddAndGetErrors(t *testing.T, ctx context.Context, repo Repository, job
 		Index:   1,
 		Stage:   "validation",
 		Message: "invalid record",
+		Record:  models.Record{"name": ""},
 		At:      now,
 	}
-	if err := repo.AddError(ctx, jobID, recErr); err != nil {
-		t.Fatalf("AddError failed: %v", err)
+	if err := repo.AddErrors(ctx, jobID, []models.RecordError{recErr}); err != nil {
+		t.Fatalf("AddErrors failed: %v", err)
 	}
-	errs, err := repo.GetErrors(ctx, jobID)
-	if err != nil || len(errs) != 1 || errs[0].Message != "invalid record" {
+	errs, total, err := repo.GetErrors(ctx, jobID, 0, 0)
+	if err != nil || total != 1 || len(errs) != 1 || errs[0].Message != "invalid record" || errs[0].Record["name"] != "" {
 		t.Fatalf("GetErrors failed: %+v, err=%v", errs, err)
 	}
 }
@@ -96,23 +120,36 @@ func TestMemoryRepository(t *testing.T) {
 	testRepositoryContract(t, repo)
 }
 
-func TestFileRepository(t *testing.T) {
+func TestSQLiteRepository(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "store")
-	repo, err := NewFileRepository(dir)
+	ctx := context.Background()
+	repo, err := NewSQLiteRepository(ctx, dir)
 	if err != nil {
-		t.Fatalf("failed to create FileRepository: %v", err)
+		t.Fatalf("failed to create SQLiteRepository: %v", err)
 	}
 	testRepositoryContract(t, repo)
 
-	repo2, err := NewFileRepository(dir)
-	if err != nil {
-		t.Fatalf("failed to reopen FileRepository: %v", err)
+	// Data must survive a restart.
+	job := &models.Job{ID: "durable", Status: models.StatusCompleted, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := repo.SaveJob(ctx, job); err != nil {
+		t.Fatal(err)
 	}
-	jobs, err := repo2.ListJobs(context.Background())
-	if err != nil {
-		t.Fatalf("ListJobs failed after restart: %v", err)
+	if err := repo.SaveRecords(ctx, job.ID, []models.Record{{"k": "v"}}); err != nil {
+		t.Fatal(err)
 	}
-	if len(jobs) != 0 {
-		t.Fatalf("expected 0 jobs after deletion, got %d", len(jobs))
+	_ = repo.Close()
+
+	repo2, err := NewSQLiteRepository(ctx, dir)
+	if err != nil {
+		t.Fatalf("failed to reopen SQLiteRepository: %v", err)
+	}
+	defer repo2.Close()
+	jobs, total, err := repo2.ListJobs(ctx, ListOptions{})
+	if err != nil || total != 1 || jobs[0].ID != "durable" {
+		t.Fatalf("expected persisted job after restart, got total=%d err=%v", total, err)
+	}
+	recs, n, _ := repo2.GetRecords(ctx, "durable", 0, 0)
+	if n != 1 || recs[0]["k"] != "v" {
+		t.Fatalf("expected persisted record after restart, got %+v", recs)
 	}
 }

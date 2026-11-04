@@ -26,7 +26,7 @@ type Rule struct {
 
 // ExportTarget defines where processed data should be persisted.
 type ExportTarget struct {
-	Type string `json:"type"`           // "json", "csv", "sqlite"
+	Type string `json:"type"`           // "json", "csv", "sqlite" (database file), "sql" (SQL dump)
 	Path string `json:"path,omitempty"` // File destination path
 }
 
@@ -43,5 +43,4 @@ type Config struct {
 	BatchSize         int            `json:"batch_size,omitempty"`
 	MaxRecords        int            `json:"max_records,omitempty"`
 	DLQPath           string         `json:"dlq_path,omitempty"`
-	DeadLetterPath    string         `json:"dead_letter_path,omitempty"`
 }

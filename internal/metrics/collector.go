@@ -85,6 +85,18 @@ func (c *Collector) ObserveStageLatency(stage string, d time.Duration) {
 	c.stageDurationCount[stage]++
 }
 
+// ObserveStageLatencyBatch records the total latency of n operations for a stage.
+// Workers pre-aggregate latencies to avoid one channel message per record.
+func (c *Collector) ObserveStageLatencyBatch(stage string, total time.Duration, n int64) {
+	if n <= 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stageDurationSum[stage] += total
+	c.stageDurationCount[stage] += n
+}
+
 // Snapshot captures current metrics values for export.
 type Snapshot struct {
 	JobsTotal             int64

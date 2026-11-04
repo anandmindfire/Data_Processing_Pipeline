@@ -36,6 +36,13 @@ func (t *RecordTransformer) Transform(r models.Record, rules []models.Rule) (mod
 			}
 			out[rule.Field] = transformedNum
 		}
+		if strings.EqualFold(rule.Type, "boolean") || strings.EqualFold(rule.Type, "bool") {
+			b, err := convertBool(rule, val)
+			if err != nil {
+				return nil, err
+			}
+			out[rule.Field] = b
+		}
 
 		if rule.Normalize != "" {
 			out[rule.Field] = applyStringNormalization(rule.Normalize, out[rule.Field])

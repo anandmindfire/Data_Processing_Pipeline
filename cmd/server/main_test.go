@@ -59,7 +59,7 @@ func TestHandleFlags(t *testing.T) {
 
 func TestResolveHealthCheckURL(t *testing.T) {
 	// Clean env before and after
-	envVars := []string{"API_BASE_URL", "SERVER_URL", "PORT", "SERVER_PORT", "ADDR", "SERVER_ADDR"}
+	envVars := []string{"HEALTHCHECK_URL", "API_BASE_URL", "SERVER_URL", "PORT", "SERVER_PORT", "ADDR", "SERVER_ADDR"}
 	clearEnv := func() {
 		for _, v := range envVars {
 			_ = os.Unsetenv(v)
@@ -99,13 +99,13 @@ func TestResolveHealthCheckURL(t *testing.T) {
 			expected: "http://127.0.0.1:5050/healthz",
 		},
 		{
-			name:     "API_BASE_URL takes precedence",
-			env:      map[string]string{"API_BASE_URL": "http://custom-domain.internal:8000"},
-			expected: "http://custom-domain.internal:8000/healthz",
+			name:     "public API_BASE_URL is ignored for the local probe",
+			env:      map[string]string{"API_BASE_URL": "https://pipeline.example.com", "ADDR": ":8080"},
+			expected: "http://127.0.0.1:8080/healthz",
 		},
 		{
-			name:     "SERVER_URL fallback",
-			env:      map[string]string{"SERVER_URL": "http://app.cluster.local:9000/"},
+			name:     "explicit HEALTHCHECK_URL override",
+			env:      map[string]string{"HEALTHCHECK_URL": "http://app.cluster.local:9000/healthz"},
 			expected: "http://app.cluster.local:9000/healthz",
 		},
 	}
