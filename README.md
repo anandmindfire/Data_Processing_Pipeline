@@ -1,8 +1,8 @@
 # Concurrent Data Processing Pipeline (Go)
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/anandmindfire/data-processing-pipeline.svg)](https://pkg.go.dev/github.com/anandmindfire/data-processing-pipeline)
-[![CI Pipeline](https://github.com/anandmindfire/data-processing-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/anandmindfire/data-processing-pipeline/actions/workflows/ci.yml)
-[![OpenAPI Spec](https://img.shields.io/badge/OpenAPI-3.0.3-blue.svg)](docs/openapi.json)
+[![CI Pipeline](https://github.com/anandmindfire/Data_Processing_Pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/anandmindfire/Data_Processing_Pipeline/actions/workflows/ci.yml)
+[![OpenAPI Spec](https://img.shields.io/badge/OpenAPI-3.0.3-blue.svg)](internal/api/openapi.json)
 [![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8.svg)](go.mod)
 [![Code Quality](https://img.shields.io/badge/code%20quality-golangci--lint-brightgreen.svg)](.golangci.yml)
 [![Zero Data Races](https://img.shields.io/badge/go%20test%20-race-brightgreen.svg)](Makefile)
@@ -559,6 +559,6 @@ We welcome contributions to the Data Processing Pipeline! Please review our comm
 
 - **[Design Report (<= 1 Page)](docs/design-report.md):** Executive report summarizing design choices, the concurrency model, channel lifecycle ownership, and engineering trade-offs.
 - **[Production Readiness Analysis](docs/production-readiness.md):** In-depth engineering blueprint contrasting current codebase achievements with enterprise cloud requirements (PostgreSQL migrations, S3/GCS object storage, durable queues, OpenTelemetry, and container hardening).
-- **[OpenAPI 3.0.3 Specification](docs/openapi.json):** Full OpenAPI specification describing all REST endpoints, parameters, schemas, and responses.
+- **[OpenAPI 3.0.3 Specification](internal/api/openapi.json):** Full OpenAPI specification describing all REST endpoints, parameters, schemas, and responses.
 - **[Contributing Guidelines](CONTRIBUTING.md):** Developer setup, engineering standards, and PR process.
 - **[Code of Conduct](CODE_OF_CONDUCT.md):** Community engagement standards.
