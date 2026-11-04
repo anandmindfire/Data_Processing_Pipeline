@@ -110,4 +110,3 @@ func startTransformationWorkers(
 	}
 	return &wg
 }
-

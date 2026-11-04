@@ -8,4 +8,3 @@ type Item struct {
 	Index  int
 	Record models.Record
 }
-

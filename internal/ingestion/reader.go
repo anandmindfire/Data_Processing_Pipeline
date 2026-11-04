@@ -58,32 +58,46 @@ func (r *SourceReader) Read(ctx context.Context, s models.Source, maxRecords int
 	case "json":
 		return readJSON(ctx, stream, maxRecords, emit)
 	default:
-		return fmt.Errorf("unsupported format %q for source %q", format, s.Name)
+		return fmt.Errorf("%w: format %q for source %q", ErrUnsupportedSourceType, format, s.Name)
 	}
 }
 
 func (r *SourceReader) openStream(ctx context.Context, s models.Source) (io.ReadCloser, error) {
-	switch strings.ToLower(s.Type) {
-	case "csv", "json":
-		if s.Path == "" {
-			return nil, fmt.Errorf("source %q: path required", s.Name)
-		}
-		return os.Open(s.Path)
-	case "http", "api":
+	if s.URL != "" || strings.EqualFold(s.Type, "http") || strings.EqualFold(s.Type, "api") {
 		return fetchHTTP(ctx, s, r.client)
-	default:
-		return nil, fmt.Errorf("unsupported source type %q", s.Type)
 	}
+
+	if s.Path != "" {
+		f, err := os.Open(s.Path)
+		if err != nil {
+			return nil, fmt.Errorf("open source %q (%s): %w", s.Name, s.Path, err)
+		}
+		return f, nil
+	}
+
+	return nil, fmt.Errorf("source %q: %w", s.Name, ErrSourceRequired)
 }
 
 func resolveFormat(s models.Source) string {
 	format := strings.ToLower(s.Format)
-	if format == "" {
-		format = strings.ToLower(s.Type)
-		if format == "http" || format == "api" {
-			format = "json"
-		}
+	if format != "" {
+		return format
 	}
-	return format
-}
 
+	target := strings.ToLower(s.Path)
+	if target == "" {
+		target = strings.ToLower(s.URL)
+	}
+
+	if strings.HasSuffix(target, ".csv") || strings.EqualFold(s.Type, "csv") {
+		return "csv"
+	}
+	if strings.HasSuffix(target, ".json") || strings.EqualFold(s.Type, "json") {
+		return "json"
+	}
+
+	if strings.EqualFold(s.Type, "http") || strings.EqualFold(s.Type, "api") {
+		return "json"
+	}
+	return strings.ToLower(s.Type)
+}

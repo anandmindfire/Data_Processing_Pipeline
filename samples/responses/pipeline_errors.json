@@ -1,0 +1,18 @@
+{
+  "job_id": "job-550e8400-e29b-41d4-a716-446655440000",
+  "errors": [
+    {
+      "source": "employees-csv",
+      "index": 4,
+      "stage": "validation",
+      "message": "field \"salary\": invalid number \"invalid\"",
+      "record": {
+        "department": "Engineering",
+        "name": "Eve",
+        "salary": "invalid"
+      },
+      "at": "2026-11-03T10:00:00.120Z"
+    }
+  ]
+}
+

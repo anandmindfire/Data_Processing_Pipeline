@@ -43,16 +43,16 @@ func (e *FileExporter) Export(records []models.Record, targets []models.ExportTa
 
 		f, err := os.Create(path)
 		if err != nil {
-			return "", fmt.Errorf("create export file %q: %w", path, err)
+			return "", fmt.Errorf("%w: create file %q: %w", ErrExportFailed, path, err)
 		}
 
 		err = writeToTarget(f, target.Type, records)
 		closeErr := f.Close()
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("%w: %w", ErrExportFailed, err)
 		}
 		if closeErr != nil {
-			return "", closeErr
+			return "", fmt.Errorf("%w: close file %q: %w", ErrExportFailed, path, closeErr)
 		}
 
 		if primaryPath == "" {
@@ -76,7 +76,6 @@ func writeToTarget(f *os.File, targetType string, records []models.Record) error
 	case "csv":
 		return writeCSV(f, records)
 	default:
-		return fmt.Errorf("unsupported export target type %q", targetType)
+		return fmt.Errorf("%w: %q", ErrUnsupportedExportTarget, targetType)
 	}
 }
-

@@ -14,4 +14,3 @@ type RecordError struct {
 	Record  Record    `json:"record,omitempty"`
 	At      time.Time `json:"at"`
 }
-

@@ -12,6 +12,11 @@ func (s *Server) setupRoutes() {
 
 	mux.HandleFunc("/healthz", s.handleHealth)
 	mux.HandleFunc("/metrics", s.handleMetrics)
+	mux.HandleFunc("/docs", s.handleSwaggerUI)
+	mux.HandleFunc("/docs/", s.handleSwaggerUI)
+	mux.HandleFunc("/docs/openapi.json", s.handleOpenAPISpec)
+	mux.HandleFunc("/swagger", redirectDocs)
+	mux.HandleFunc("/swagger/", redirectDocs)
 	mux.HandleFunc("/api/v1/pipelines", s.handlePipelinesCollection)
 	mux.HandleFunc("/api/v1/pipelines/", s.handlePipelineItem)
 
@@ -23,4 +28,8 @@ func (s *Server) setupRoutes() {
 	handler = middleware.Recovery(handler)
 
 	s.handler = handler
+}
+
+func redirectDocs(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/docs", http.StatusMovedPermanently)
 }

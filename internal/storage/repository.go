@@ -21,4 +21,3 @@ type Repository interface {
 
 	Close() error
 }
-

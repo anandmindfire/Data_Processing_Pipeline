@@ -140,4 +140,3 @@ func (m *Manager) GetErrors(ctx context.Context, id string) ([]models.RecordErro
 	}
 	return errs, true, nil
 }
-

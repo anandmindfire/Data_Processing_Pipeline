@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,7 +12,7 @@ import (
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
-// FileRepository provides atomic JSON snapshot persistence on local disk.
+// FileRepository provides atomic JSON snapshot and streaming records persistence on local disk.
 type FileRepository struct {
 	mu      sync.RWMutex
 	dir     string
@@ -65,10 +66,9 @@ func (f *FileRepository) load() error {
 
 func (f *FileRepository) persistLocked() error {
 	b, err := json.MarshalIndent(struct {
-		Jobs    map[string]*models.Job          `json:"jobs"`
-		Errors  map[string][]models.RecordError `json:"errors"`
-		Records map[string][]models.Record      `json:"records"`
-	}{f.jobs, f.errors, f.records}, "", "  ")
+		Jobs   map[string]*models.Job          `json:"jobs"`
+		Errors map[string][]models.RecordError `json:"errors"`
+	}{f.jobs, f.errors}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -116,6 +116,7 @@ func (f *FileRepository) DeleteJob(_ context.Context, id string) error {
 	delete(f.jobs, id)
 	delete(f.errors, id)
 	delete(f.records, id)
+	_ = os.Remove(filepath.Join(f.dir, "records", id+".jsonl"))
 	return f.persistLocked()
 }
 
@@ -137,26 +138,75 @@ func (f *FileRepository) GetErrors(_ context.Context, jobID string) ([]models.Re
 	return out, nil
 }
 
-// SaveRecord appends a processed record to disk.
+// SaveRecord appends a processed record to memory and to a per-job JSONL append file.
 func (f *FileRepository) SaveRecord(_ context.Context, jobID string, record models.Record) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.records[jobID] = append(f.records[jobID], record)
-	return f.persistLocked()
+	return f.appendRecordLocked(jobID, record)
+}
+
+func (f *FileRepository) appendRecordLocked(jobID string, record models.Record) error {
+	recDir := filepath.Join(f.dir, "records")
+	if err := os.MkdirAll(recDir, 0755); err != nil {
+		return err
+	}
+	path := filepath.Join(recDir, jobID+".jsonl")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	b, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	_, err = file.Write(append(b, '\n'))
+	return err
 }
 
 // GetRecords retrieves all processed records for a job.
 func (f *FileRepository) GetRecords(_ context.Context, jobID string) ([]models.Record, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	list := f.records[jobID]
-	out := make([]models.Record, len(list))
-	copy(out, list)
-	return out, nil
+	if list, exists := f.records[jobID]; exists {
+		out := make([]models.Record, len(list))
+		copy(out, list)
+		return out, nil
+	}
+
+	// Fallback to reading from records file if not cached
+	return f.readRecordsFile(jobID)
+}
+
+func (f *FileRepository) readRecordsFile(jobID string) ([]models.Record, error) {
+	path := filepath.Join(f.dir, "records", jobID+".jsonl")
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var records []models.Record
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var rec models.Record
+		if err := json.Unmarshal(line, &rec); err == nil {
+			records = append(records, rec)
+		}
+	}
+	return records, scanner.Err()
 }
 
 // Close flushes and closes file operations.
 func (f *FileRepository) Close() error {
 	return nil
 }
-

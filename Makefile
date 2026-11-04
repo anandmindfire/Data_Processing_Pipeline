@@ -1,9 +1,9 @@
-.PHONY: all build run test race vet clean docker-build docker-up docker-down
+.PHONY: all build run test race vet fmt lint hooks check clean docker-build docker-up docker-down
 
 BINARY_NAME=pipeline-server
 MAIN_PACKAGE=./cmd/server
 
-all: test build
+all: check build
 
 build:
 	@echo "==> Building binary $(BINARY_NAME)..."
@@ -25,6 +25,31 @@ vet:
 	@echo "==> Running static analysis..."
 	go vet ./...
 
+fmt:
+	@echo "==> Formatting Go files..."
+	@if command -v gofumpt >/dev/null 2>&1; then \
+		gofumpt -w .; \
+	else \
+		go fmt ./...; \
+	fi
+
+lint:
+	@echo "==> Running linter..."
+	@if command -v golangci-lint >/dev/null 2>&1; then \
+		golangci-lint run; \
+	else \
+		go vet ./...; \
+	fi
+
+hooks:
+	@echo "==> Configuring git hooks in .githooks/..."
+	git config core.hooksPath .githooks
+	chmod +x .githooks/*
+	@echo "==> Git hooks activated successfully!"
+
+check: fmt vet race
+	@echo "==> All checks passed!"
+
 clean:
 	@echo "==> Cleaning build artifacts..."
 	rm -rf bin/ exports/ data/
@@ -40,4 +65,3 @@ docker-up:
 docker-down:
 	@echo "==> Stopping Docker containers..."
 	docker compose down
-

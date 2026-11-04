@@ -73,4 +73,3 @@ func TestJobManagerLifecycle(t *testing.T) {
 		t.Fatal("expected job to be deleted")
 	}
 }
-

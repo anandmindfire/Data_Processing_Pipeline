@@ -49,6 +49,53 @@ func TestHealthzAndMetrics(t *testing.T) {
 	}
 }
 
+func TestSwaggerDocsEndpoints(t *testing.T) {
+	srv, _, _ := setupTestServer(t)
+
+	// 1. Test GET /docs
+	req := httptest.NewRequest(http.MethodGet, "/docs", nil)
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected /docs code 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("expected text/html, got: %s", rec.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(rec.Body.String(), "SwaggerUIBundle") {
+		t.Fatalf("expected SwaggerUIBundle in body")
+	}
+
+	// 2. Test GET /docs/openapi.json
+	req = httptest.NewRequest(http.MethodGet, "/docs/openapi.json", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected /docs/openapi.json code 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("expected application/json, got: %s", rec.Header().Get("Content-Type"))
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &spec); err != nil {
+		t.Fatalf("invalid OpenAPI JSON spec: %v", err)
+	}
+	if spec["openapi"] != "3.0.3" {
+		t.Fatalf("expected openapi version 3.0.3, got: %v", spec["openapi"])
+	}
+
+	// 3. Test GET /swagger redirect
+	req = httptest.NewRequest(http.MethodGet, "/swagger/", nil)
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMovedPermanently {
+		t.Fatalf("expected redirect 301, got %d", rec.Code)
+	}
+	if rec.Header().Get("Location") != "/docs" {
+		t.Fatalf("expected redirect to /docs, got %s", rec.Header().Get("Location"))
+	}
+}
+
 func TestPipelineLifecycleEndpoints(t *testing.T) {
 	srv, store, dir := setupTestServer(t)
 

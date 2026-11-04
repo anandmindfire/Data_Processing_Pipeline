@@ -1,0 +1,63 @@
+#!/bin/sh
+# .githooks/commit-msg
+# Enforces Conventional Commits specification.
+
+COMMIT_MSG_FILE="$1"
+FIRST_LINE=$(head -n 1 "$COMMIT_MSG_FILE")
+
+# Allow merge commits automatically
+if echo "$FIRST_LINE" | grep -qE '^Merge (branch|pull request|remote-tracking branch)'; then
+    exit 0
+fi
+
+# Allow revert commits automatically
+if echo "$FIRST_LINE" | grep -qE '^Revert "'; then
+    exit 0
+fi
+
+# Conventional Commits regex pattern:
+# <type>(<scope>)?: <subject>
+# Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+PATTERN="^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9_-]+\))?!?: .+$"
+
+if ! echo "$FIRST_LINE" | grep -qE "$PATTERN"; then
+    echo ""
+    echo "❌ [commit-msg] INVALID COMMIT MESSAGE FORMAT!"
+    echo "--------------------------------------------------"
+    echo "Your message was:"
+    echo "  \"$FIRST_LINE\""
+    echo ""
+    echo "Commit messages must follow the Conventional Commits specification:"
+    echo "  <type>(<optional scope>): <description>"
+    echo ""
+    echo "Allowed types:"
+    echo "  feat     : A new feature"
+    echo "  fix      : A bug fix"
+    echo "  docs     : Documentation changes only"
+    echo "  style    : Code style, formatting, white-space changes"
+    echo "  refactor : Code changes that neither fix a bug nor add a feature"
+    echo "  perf     : Performance improvements"
+    echo "  test     : Adding or fixing tests"
+    echo "  build    : Build system or external dependency changes"
+    echo "  ci       : CI/CD configuration files and scripts"
+    echo "  chore    : Repository maintenance, tooling, configs"
+    echo "  revert   : Reverting a previous commit"
+    echo ""
+    echo "Examples:"
+    echo "  feat(ingestion): support streaming json and csv inputs"
+    echo "  fix(pipeline): prevent concurrent access to metrics"
+    echo "  refactor(storage): introduce append-only jsonl records log"
+    echo "  docs: update architecture diagram and api reference"
+    echo "--------------------------------------------------"
+    exit 1
+fi
+
+# Check maximum line length for the header (standard limit: 72 characters)
+HEADER_LEN=$(echo "$FIRST_LINE" | wc -c | tr -d ' ')
+if [ "$HEADER_LEN" -gt 100 ]; then
+    echo "⚠️  [commit-msg] Warning: Commit subject line is long ($HEADER_LEN characters). Consider keeping it under 72 chars."
+fi
+
+echo "✅ [commit-msg] Commit message conforms to Conventional Commits format."
+exit 0
+

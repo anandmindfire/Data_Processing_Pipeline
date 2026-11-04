@@ -13,4 +13,3 @@ type Job struct {
 	ResultsPath string         `json:"results_path,omitempty"`
 	Aggregates  map[string]any `json:"aggregates,omitempty"`
 }
-

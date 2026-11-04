@@ -214,4 +214,3 @@ func (s *Server) handleJobCancel(w http.ResponseWriter, r *http.Request, id stri
 		"job_id": id,
 	})
 }
-

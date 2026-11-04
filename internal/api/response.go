@@ -18,4 +18,3 @@ func writeError(w http.ResponseWriter, status int, message string) {
 		"error": message,
 	})
 }
-

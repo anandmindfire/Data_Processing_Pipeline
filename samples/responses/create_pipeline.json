@@ -1,0 +1,85 @@
+{
+  "id": "job-550e8400-e29b-41d4-a716-446655440000",
+  "status": "PENDING",
+  "config": {
+    "sources": [
+      {
+        "type": "csv",
+        "name": "employees-csv",
+        "path": "samples/input.csv"
+      },
+      {
+        "type": "json",
+        "name": "employees-json",
+        "path": "samples/input.json"
+      }
+    ],
+    "rules": [
+      {
+        "field": "name",
+        "required": true,
+        "type": "string",
+        "normalize": "trim"
+      },
+      {
+        "field": "department",
+        "required": true,
+        "type": "string",
+        "normalize": "lower"
+      },
+      {
+        "field": "salary",
+        "required": true,
+        "type": "number",
+        "min": 0
+      }
+    ],
+    "aggregations": [
+      {
+        "group_by": "department",
+        "field": "salary",
+        "operation": "count",
+        "name": "employee_count"
+      },
+      {
+        "group_by": "department",
+        "field": "salary",
+        "operation": "sum",
+        "name": "salary_total"
+      },
+      {
+        "group_by": "department",
+        "field": "salary",
+        "operation": "avg",
+        "name": "salary_average"
+      }
+    ],
+    "exports": [
+      {
+        "type": "json",
+        "path": "exports/employees.json"
+      },
+      {
+        "type": "csv",
+        "path": "exports/employees.csv"
+      }
+    ],
+    "validation_workers": 4,
+    "transform_workers": 4,
+    "buffer_size": 64,
+    "timeout_seconds": 60
+  },
+  "created_at": "2026-11-03T10:00:00Z",
+  "updated_at": "2026-11-03T10:00:00Z",
+  "metrics": {
+    "discovered": 0,
+    "processed": 0,
+    "valid": 0,
+    "rejected": 0,
+    "exported": 0,
+    "errors": 0,
+    "records_per_second": 0,
+    "stage_latency_ns": {}
+  }
+}
+

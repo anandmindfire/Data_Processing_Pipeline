@@ -105,4 +105,3 @@ func cloneJob(j *models.Job) *models.Job {
 	}
 	return &c
 }
-

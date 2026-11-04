@@ -2,6 +2,7 @@ package validation
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -28,9 +29,21 @@ func ParseNumber(v any) (float64, bool) {
 	return 0, false
 }
 
+// ParseBool parses boolean values from bool types or truthy/falsy strings.
+func ParseBool(v any) (bool, bool) {
+	switch x := v.(type) {
+	case bool:
+		return x, true
+	case string:
+		b, err := strconv.ParseBool(strings.TrimSpace(x))
+		return b, err == nil
+	}
+	return false, false
+}
+
 func checkRequired(field string, value any, ok bool) error {
 	if !ok || value == nil || strings.TrimSpace(fmt.Sprint(value)) == "" {
-		return fmt.Errorf("field %q is required", field)
+		return fmt.Errorf("field %q: %w", field, ErrRequiredField)
 	}
 	return nil
 }
@@ -38,21 +51,38 @@ func checkRequired(field string, value any, ok bool) error {
 func checkNumericRule(rule models.Rule, value any) error {
 	n, isNum := ParseNumber(value)
 	if !isNum {
-		return fmt.Errorf("field %q must be numeric", rule.Field)
+		return fmt.Errorf("field %q: invalid number %q: %w", rule.Field, fmt.Sprint(value), ErrTypeMismatch)
 	}
 	if rule.Min != nil && n < *rule.Min {
-		return fmt.Errorf("field %q must be >= %v", rule.Field, *rule.Min)
+		return fmt.Errorf("field %q: value %v below minimum %v: %w", rule.Field, n, *rule.Min, ErrNumericConstraint)
 	}
 	if rule.Max != nil && n > *rule.Max {
-		return fmt.Errorf("field %q must be <= %v", rule.Field, *rule.Max)
+		return fmt.Errorf("field %q: value %v exceeds maximum %v: %w", rule.Field, n, *rule.Max, ErrNumericConstraint)
 	}
 	return nil
 }
 
-func checkStringRule(field string, value any) error {
-	if _, isStr := value.(string); !isStr {
-		return fmt.Errorf("field %q must be a string", field)
+func checkStringRule(rule models.Rule, value any) error {
+	s, isStr := value.(string)
+	if !isStr {
+		return fmt.Errorf("field %q: %w (expected string)", rule.Field, ErrTypeMismatch)
+	}
+	if rule.Pattern != "" {
+		matched, err := regexp.MatchString(rule.Pattern, s)
+		if err != nil {
+			return fmt.Errorf("field %q: invalid regex %q: %w", rule.Field, rule.Pattern, err)
+		}
+		if !matched {
+			return fmt.Errorf("field %q: value %q does not match pattern %q: %w", rule.Field, s, rule.Pattern, ErrPatternMismatch)
+		}
 	}
 	return nil
 }
 
+func checkBooleanRule(rule models.Rule, value any) error {
+	_, isBool := ParseBool(value)
+	if !isBool {
+		return fmt.Errorf("field %q: invalid boolean %q: %w", rule.Field, fmt.Sprint(value), ErrTypeMismatch)
+	}
+	return nil
+}
