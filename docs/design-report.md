@@ -30,6 +30,6 @@ Every pipeline job executes under a hierarchical `context.Context` derived from 
 | **State Synchronization** | Fan-In sequential aggregation | Avoids mutex contention in the critical data path. Memory footprint scales with aggregate group cardinality. |
 | **Error Handling** | Stage error quarantine pattern | Real-world resilience: 1 invalid row out of 1,000,000 must not abort the remaining 999,999 valid records. |
 | **Security & Reliability** | In-memory token bucket & concurrency quotas | Protects API from denial-of-service and memory exhaustion without external Redis dependencies. |
-| **Dependencies** | 100% Go Standard Library | Zero supply-chain CVE vulnerabilities, instant builds, and maximum cross-platform portability. |
+| **Dependencies & Routing** | Idiomatic Standard Library + `chi/v5` Router | Keeps attack surface minimal, zero-allocation route matching, standard `net/http` compatibility, and instant compilation. |
 
 See [docs/production-readiness.md](file:///Users/anandk/Projects/data-processing-pipeline/docs/production-readiness.md) for the roadmap bridging this codebase into multi-node Kubernetes enterprise deployments.

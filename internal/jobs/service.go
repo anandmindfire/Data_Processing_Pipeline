@@ -63,6 +63,9 @@ func (m *Manager) cleanupExports(job *models.Job) {
 			_ = os.Remove(path)
 		}
 	}
+	if job.Config.DeadLetterPath != "" {
+		_ = os.Remove(job.Config.DeadLetterPath)
+	}
 }
 
 // GetProgress calculates current percentage and processing metrics.

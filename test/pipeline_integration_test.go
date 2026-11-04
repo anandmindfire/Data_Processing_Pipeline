@@ -62,6 +62,8 @@ Eve,Engineering,invalid
 
 	exportJSON := filepath.Join(tempDir, "out.json")
 	exportCSV := filepath.Join(tempDir, "out.csv")
+	exportSQL := filepath.Join(tempDir, "out.sql")
+	deadLetterPath := filepath.Join(tempDir, "dead_letter.json")
 
 	// 2. Mock HTTP endpoint for remote API ingestion
 	mockClient := &http.Client{
@@ -116,7 +118,9 @@ Eve,Engineering,invalid
 		Exports: []models.ExportTarget{
 			{Type: "json", Path: exportJSON},
 			{Type: "csv", Path: exportCSV},
+			{Type: "sqlite", Path: exportSQL},
 		},
+		DeadLetterPath:    deadLetterPath,
 		ValidationWorkers: 4,
 		TransformWorkers:  4,
 		BufferSize:        32,
@@ -250,6 +254,30 @@ Eve,Engineering,invalid
 		t.Fatalf("expected 8 CSV rows (1 header + 7 data), got %d", len(csvRows))
 	}
 
+	// Verify SQLite export on disk
+	if _, err := os.Stat(exportSQL); os.IsNotExist(err) {
+		t.Fatalf("expected export SQLite file %s to exist", exportSQL)
+	}
+	sqlBytes, err := os.ReadFile(exportSQL)
+	if err != nil {
+		t.Fatalf("failed to read export SQLite file: %v", err)
+	}
+	if !strings.Contains(string(sqlBytes), "CREATE TABLE IF NOT EXISTS records") {
+		t.Fatalf("expected CREATE TABLE statement in SQLite dump")
+	}
+
+	// Verify Dead-Letter queue file on disk
+	if _, err := os.Stat(deadLetterPath); os.IsNotExist(err) {
+		t.Fatalf("expected dead-letter file %s to exist", deadLetterPath)
+	}
+	dlBytes, err := os.ReadFile(deadLetterPath)
+	if err != nil {
+		t.Fatalf("failed to read dead-letter file: %v", err)
+	}
+	if !strings.Contains(string(dlBytes), "Eve") {
+		t.Fatalf("expected dead-letter file to contain invalid record for Eve")
+	}
+
 	// 8. Verify Error Quarantine via GET /api/v1/pipelines/:id/errors
 	errReq := httptest.NewRequest(http.MethodGet, "/api/v1/pipelines/"+jobID+"/errors", nil)
 	errRec := httptest.NewRecorder()
@@ -373,6 +401,84 @@ func TestPipelineCancellation(t *testing.T) {
 	}
 	if !cancelled {
 		t.Fatalf("job was not cancelled within timeout")
+	}
+}
+
+func TestPipelineFailedIngestion(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := config.Load()
+	cfg.DataDir = filepath.Join(tempDir, "data")
+	cfg.ExportDir = filepath.Join(tempDir, "exports")
+
+	repo, err := storage.NewFileRepository(cfg.DataDir)
+	if err != nil {
+		t.Fatalf("failed to create repo: %v", err)
+	}
+
+	collector := metrics.NewCollector()
+	pipe := pipeline.NewPipeline(
+		ingestion.NewReader(http.DefaultClient),
+		validation.NewValidator(),
+		transformation.NewTransformer(),
+		export.NewExporter(tempDir),
+		repo,
+		collector,
+	)
+	mgr := jobs.NewManager(cfg, repo, pipe)
+	server := api.NewServer(cfg, mgr)
+
+	jobSpec := models.Config{
+		Sources: []models.Source{
+			{Type: "csv", Name: "nonexistent-file", Path: filepath.Join(tempDir, "does_not_exist.csv")},
+		},
+		Exports: []models.ExportTarget{
+			{Type: "json", Path: filepath.Join(tempDir, "failed.json")},
+		},
+		TimeoutSeconds: 5,
+	}
+
+	body, _ := json.Marshal(jobSpec)
+	postReq := httptest.NewRequest(http.MethodPost, "/api/v1/pipelines", bytes.NewReader(body))
+	postRec := httptest.NewRecorder()
+	server.ServeHTTP(postRec, postReq)
+
+	var job models.Job
+	_ = json.Unmarshal(postRec.Body.Bytes(), &job)
+
+	// Poll until job completes with FAILED status
+	failed := false
+	for i := 0; i < 30; i++ {
+		time.Sleep(20 * time.Millisecond)
+		statusReq := httptest.NewRequest(http.MethodGet, "/api/v1/pipelines/"+job.ID, nil)
+		statusRec := httptest.NewRecorder()
+		server.ServeHTTP(statusRec, statusReq)
+
+		var updatedJob models.Job
+		_ = json.Unmarshal(statusRec.Body.Bytes(), &updatedJob)
+		if updatedJob.Status == models.StatusFailed {
+			failed = true
+			break
+		}
+	}
+	if !failed {
+		t.Fatalf("expected job to fail due to missing source file, status remained non-failed")
+	}
+
+	// Verify error endpoint lists the ingestion failure
+	errReq := httptest.NewRequest(http.MethodGet, "/api/v1/pipelines/"+job.ID+"/errors", nil)
+	errRec := httptest.NewRecorder()
+	server.ServeHTTP(errRec, errReq)
+
+	var errResp struct {
+		JobID  string               `json:"job_id"`
+		Errors []models.RecordError `json:"errors"`
+	}
+	_ = json.Unmarshal(errRec.Body.Bytes(), &errResp)
+	if len(errResp.Errors) == 0 {
+		t.Fatalf("expected at least one error recorded for nonexistent source")
+	}
+	if errResp.Errors[0].Stage != "ingest" {
+		t.Fatalf("expected stage 'ingest', got %q", errResp.Errors[0].Stage)
 	}
 }
 

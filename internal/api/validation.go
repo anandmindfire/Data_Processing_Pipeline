@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
@@ -30,6 +31,22 @@ func ValidateJobConfig(c *models.Config) error {
 	for i, exp := range c.Exports {
 		if exp.Type == "" {
 			return fmt.Errorf("export[%d]: type is required", i)
+		}
+		switch strings.ToLower(exp.Type) {
+		case "json", "csv", "sqlite", "sql":
+		default:
+			return fmt.Errorf("export[%d]: unsupported export target %q (must be json, csv, or sqlite)", i, exp.Type)
+		}
+	}
+
+	for i, rule := range c.Rules {
+		if rule.Field == "" {
+			return fmt.Errorf("rule[%d]: field is required", i)
+		}
+		if rule.Pattern != "" {
+			if _, err := regexp.Compile(rule.Pattern); err != nil {
+				return fmt.Errorf("rule[%d] %q: invalid regex pattern %q: %w", i, rule.Field, rule.Pattern, err)
+			}
 		}
 	}
 

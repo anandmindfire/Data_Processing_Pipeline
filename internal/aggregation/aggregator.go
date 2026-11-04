@@ -41,7 +41,11 @@ func (a *MetricsAggregator) Process(r models.Record) {
 		key := BuildAggKey(def)
 		group := "_all"
 		if def.GroupBy != "" {
-			group = fmt.Sprint(r[def.GroupBy])
+			if grpVal, ok := r[def.GroupBy]; ok && grpVal != nil {
+				group = fmt.Sprint(grpVal)
+			} else {
+				group = "unknown"
+			}
 		}
 
 		v, isNum := validation.ParseNumber(r[def.Field])

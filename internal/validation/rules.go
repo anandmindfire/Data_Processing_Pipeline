@@ -2,7 +2,6 @@ package validation
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -62,17 +61,17 @@ func checkNumericRule(rule models.Rule, value any) error {
 	return nil
 }
 
-func checkStringRule(rule models.Rule, value any) error {
+func (v *RecordValidator) checkStringRule(rule models.Rule, value any) error {
 	s, isStr := value.(string)
 	if !isStr {
 		return fmt.Errorf("field %q: %w (expected string)", rule.Field, ErrTypeMismatch)
 	}
 	if rule.Pattern != "" {
-		matched, err := regexp.MatchString(rule.Pattern, s)
+		re, err := v.getOrCompileRegex(rule.Pattern)
 		if err != nil {
 			return fmt.Errorf("field %q: invalid regex %q: %w", rule.Field, rule.Pattern, err)
 		}
-		if !matched {
+		if !re.MatchString(s) {
 			return fmt.Errorf("field %q: value %q does not match pattern %q: %w", rule.Field, s, rule.Pattern, ErrPatternMismatch)
 		}
 	}

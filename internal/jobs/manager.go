@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/anandmindfire/data-processing-pipeline/internal/config"
@@ -11,6 +12,8 @@ import (
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 	"github.com/anandmindfire/data-processing-pipeline/internal/storage"
 )
+
+var jobSequence atomic.Uint64
 
 // PipelineExecutor is the behavior required by Job Manager to run a pipeline.
 type PipelineExecutor interface {
@@ -47,7 +50,8 @@ func (m *Manager) SubmitJob(ctx context.Context, cfg models.Config) (*models.Job
 	}
 
 	now := time.Now().UTC()
-	jobID := now.Format("20060102T150405.000000000")
+	seq := jobSequence.Add(1) % 1000
+	jobID := fmt.Sprintf("%s-%03d", now.Format("20060102T150405.000000000"), seq)
 	job := &models.Job{
 		ID:        jobID,
 		Status:    models.StatusPending,
