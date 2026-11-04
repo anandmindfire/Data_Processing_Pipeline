@@ -46,7 +46,7 @@ Please confirm that all local verification steps have passed before requesting r
 - [ ] **Concurrency & Race Detection:** Concurrency test suite passes with **zero data races** (`make race` or `go test -race -count=1 ./...`)
 - [ ] **Build:** Server binary compiles cleanly without warnings (`make build`)
 - [ ] **Container Build (if applicable):** Multi-stage Docker image builds cleanly (`make docker-build`)
-- [ ] **API Documentation:** Swagger/OpenAPI spec (`docs/openapi.json` & `/docs`) updated if API endpoints or schemas changed
+- [ ] **API Documentation:** Swagger/OpenAPI spec (`internal/api/openapi.json` & `/docs`) updated if API endpoints or schemas changed
 
 ---
 
