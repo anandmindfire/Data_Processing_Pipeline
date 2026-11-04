@@ -114,6 +114,49 @@ func TestSourceReaderHTTP(t *testing.T) {
 	}
 }
 
+func TestSourceReaderHTTPRetry(t *testing.T) {
+	attempts := 0
+	client := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			attempts++
+			if attempts == 1 {
+				// Transient failure on first attempt
+				return &http.Response{
+					StatusCode: http.StatusServiceUnavailable,
+					Body:       io.NopCloser(strings.NewReader("service temporarily unavailable")),
+					Header:     make(http.Header),
+				}, nil
+			}
+			// Success on second attempt
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`[{"retried":true}]`)),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+
+	reader := NewReader(client)
+	out := make(chan Item, 2)
+	src := models.Source{
+		Type: "http",
+		Name: "retry-api",
+		URL:  "https://api.example.com/retry",
+	}
+
+	if err := reader.Read(context.Background(), src, 0, out, nil); err != nil {
+		t.Fatalf("expected retry to succeed, got: %v", err)
+	}
+	close(out)
+
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts)
+	}
+	if len(out) != 1 {
+		t.Fatalf("expected 1 record after retry, got %d", len(out))
+	}
+}
+
 func TestSourceReaderTable(t *testing.T) {
 	dir := t.TempDir()
 

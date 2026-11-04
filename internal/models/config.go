@@ -49,4 +49,5 @@ type Config struct {
 	BufferSize        int            `json:"buffer_size,omitempty"`
 	TimeoutSeconds    int            `json:"timeout_seconds,omitempty"`
 	MaxRecords        int            `json:"max_records,omitempty"`
+	DeadLetterPath    string         `json:"dead_letter_path,omitempty"` // Destination path for quarantined dead-letter records
 }

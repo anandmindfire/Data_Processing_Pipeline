@@ -13,7 +13,7 @@ A robust, production-oriented, concurrent data processing engine and job managem
 - **Centralized Error Quarantine:** Faulty or corrupted records are isolated with stage and field diagnostic metadata into a centralized error collection over `errorCh`. The pipeline continues processing valid rows without crashing.
 - **Pluggable Persistence:** `storage.Repository` interface abstracts storage engines, providing thread-safe In-Memory and atomic crash-safe File implementations, ready for drop-in PostgreSQL migration.
 - **Reliability & Observability Middleware:** Structured logging with standard library `log/slog`, panic recovery middleware, IP-based token-bucket rate limiting, and Prometheus metrics exposition (`/metrics`).
-- **Zero External Dependencies:** Built 100% with the Go standard library for zero supply-chain CVE vulnerabilities, fast compilation, and lightweight footprint.
+- **Lightweight & High-Performance Routing:** Built with idiomatic Go, standard library `net/http` and `log/slog`, combined with lightweight routing via `chi/v5` for clean URL parameter handling and middleware chaining.
 - **100% Race-Clean & Tested:** Unit and full end-to-end integration tests pass cleanly with `go test -race -count=1 ./...`.
 
 ---
@@ -104,9 +104,10 @@ data-processing-pipeline/
 │   │   └── config_test.go           # Configuration tests
 │   ├── export/
 │   │   ├── csv.go                   # Formatted CSV record writer
-│   │   ├── exporter.go              # Exporter dispatcher and target coordinator
+│   │   ├── exporter.go              # Exporter dispatcher and target coordinator (CSV, JSON, SQLite)
 │   │   ├── exporter_test.go         # Exporter unit tests
-│   │   └── json.go                  # Formatted JSON record writer
+│   │   ├── json.go                  # Formatted JSON record writer
+│   │   └── sqlite.go                # Transactional SQLite DDL & INSERT batch exporter
 │   ├── ingestion/
 │   │   ├── csv.go                   # Streaming CSV reader
 │   │   ├── http.go                  # Context-aware HTTP client with custom headers

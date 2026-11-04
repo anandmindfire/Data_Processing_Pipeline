@@ -629,7 +629,7 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": ["json", "csv"],
+            "enum": ["json", "csv", "sqlite", "sql"],
             "example": "json"
           },
           "path": {
@@ -691,6 +691,11 @@
             "type": "integer",
             "description": "Optional upper bound limit of records to process",
             "example": 1000
+          },
+          "dead_letter_path": {
+            "type": "string",
+            "description": "Optional destination path for quarantined dead-letter records",
+            "example": "exports/dead_letter.json"
           }
         }
       },

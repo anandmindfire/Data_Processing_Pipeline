@@ -41,13 +41,17 @@ func startValidationWorkers(
 
 				if err := validator.Validate(item.Record, rules); err != nil {
 					recordLatency("validation", time.Since(start))
-					errCh <- models.RecordError{
+					select {
+					case errCh <- models.RecordError{
 						Source:  item.Source,
 						Index:   item.Index,
 						Stage:   "validation",
 						Message: err.Error(),
 						Record:  item.Record,
 						At:      time.Now(),
+					}:
+					case <-ctx.Done():
+						return
 					}
 					continue
 				}
@@ -89,13 +93,17 @@ func startTransformationWorkers(
 				rec, err := transformer.Transform(item.Record, rules)
 				recordLatency("transform", time.Since(start))
 				if err != nil {
-					errCh <- models.RecordError{
+					select {
+					case errCh <- models.RecordError{
 						Source:  item.Source,
 						Index:   item.Index,
 						Stage:   "transform",
 						Message: err.Error(),
 						Record:  item.Record,
 						At:      time.Now(),
+					}:
+					case <-ctx.Done():
+						return
 					}
 					continue
 				}

@@ -75,6 +75,8 @@ func writeToTarget(f *os.File, targetType string, records []models.Record) error
 		return writeJSON(f, records)
 	case "csv":
 		return writeCSV(f, records)
+	case "sqlite", "sql":
+		return writeSQLite(f, records)
 	default:
 		return fmt.Errorf("%w: %q", ErrUnsupportedExportTarget, targetType)
 	}

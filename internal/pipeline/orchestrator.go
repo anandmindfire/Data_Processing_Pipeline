@@ -2,8 +2,12 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/anandmindfire/data-processing-pipeline/internal/aggregation"
@@ -139,11 +143,15 @@ func (p *Pipeline) Execute(parent context.Context, job *models.Job, onUpdate fun
 	close(errCh)
 	errWG.Wait()
 
+	if cfg.DeadLetterPath != "" {
+		p.exportDeadLetterRecords(ctx, cfg.DeadLetterPath, job.ID)
+	}
+
 	close(progressCh)
 	progressWG.Wait()
 
 	// 8. Finalize job status and metrics
-	p.finalizeJob(ctx, parent, job, agg, expErr, ingestFailures)
+	p.finalizeJob(ctx, parent, job, agg, expErr, int(ingestFailures.Load()))
 	slog.Info("pipeline job finished",
 		"job_id", job.ID,
 		"status", job.Status,
@@ -163,9 +171,8 @@ func (p *Pipeline) startIngestion(
 	rawCh chan<- ingestion.Item,
 	progressCh chan<- progressMsg,
 	errCh chan<- models.RecordError,
-) int {
-	var ingestMu sync.Mutex
-	ingestFailures := 0
+) *atomic.Int64 {
+	var ingestFailures atomic.Int64
 	var sourceWG sync.WaitGroup
 
 	for _, src := range cfg.Sources {
@@ -178,9 +185,7 @@ func (p *Pipeline) startIngestion(
 				progressCh <- progressMsg{kind: progressDiscovered, count: 1}
 			})
 			if err != nil && ctx.Err() == nil {
-				ingestMu.Lock()
-				ingestFailures++
-				ingestMu.Unlock()
+				ingestFailures.Add(1)
 				slog.Warn("source ingestion failed", "source", s.Name, "error", err)
 				errCh <- models.RecordError{
 					Source:  s.Name,
@@ -198,7 +203,7 @@ func (p *Pipeline) startIngestion(
 		close(rawCh)
 	}()
 
-	return ingestFailures
+	return &ingestFailures
 }
 
 func (p *Pipeline) runAggregationAndExport(
@@ -249,20 +254,15 @@ func (p *Pipeline) finalizeJob(
 	exportErr error,
 	ingestFailures int,
 ) {
-	if parent.Err() != nil {
+	switch {
+	case parent.Err() != nil:
 		job.Status = models.StatusCancelled
 		p.collector.IncJobsCancelled()
-	} else if ctx.Err() != nil || exportErr != nil {
+	case ctx.Err() != nil || exportErr != nil || (job.Metrics.Discovered == 0 && ingestFailures > 0):
 		job.Status = models.StatusFailed
 		p.collector.IncJobsFailed()
-	} else {
+	default:
 		job.Status = models.StatusCompleted
-	}
-
-	if job.Metrics.Discovered == 0 && ingestFailures > 0 {
-		job.Status = models.StatusFailed
-		p.collector.IncJobsFailed()
-	} else if job.Status == models.StatusCompleted {
 		p.collector.IncJobsCompleted()
 	}
 
@@ -281,5 +281,21 @@ func (p *Pipeline) finalizeJob(
 	p.collector.AddRecordsExported(job.Metrics.Exported)
 	p.collector.AddErrors(job.Metrics.Errors)
 
-	_ = p.storage.SaveJob(ctx, job)
+	saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer saveCancel()
+	_ = p.storage.SaveJob(saveCtx, job)
+}
+
+func (p *Pipeline) exportDeadLetterRecords(ctx context.Context, path string, jobID string) {
+	errs, err := p.storage.GetErrors(ctx, jobID)
+	if err != nil || len(errs) == 0 {
+		return
+	}
+	b, err := json.MarshalIndent(errs, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(path), 0755)
+	_ = os.WriteFile(path, b, 0644)
+	slog.Info("dead-letter records exported", "job_id", jobID, "count", len(errs), "path", path)
 }

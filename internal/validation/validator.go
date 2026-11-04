@@ -1,7 +1,9 @@
 package validation
 
 import (
+	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
@@ -12,11 +14,25 @@ type Validator interface {
 }
 
 // RecordValidator is the concrete implementation of Validator.
-type RecordValidator struct{}
+type RecordValidator struct {
+	regexCache sync.Map
+}
 
 // NewValidator constructs a new RecordValidator.
 func NewValidator() *RecordValidator {
 	return &RecordValidator{}
+}
+
+func (v *RecordValidator) getOrCompileRegex(pattern string) (*regexp.Regexp, error) {
+	if cached, ok := v.regexCache.Load(pattern); ok {
+		return cached.(*regexp.Regexp), nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	v.regexCache.Store(pattern, re)
+	return re, nil
 }
 
 // Validate verifies that the record satisfies all specified rules.
@@ -32,19 +48,19 @@ func (v *RecordValidator) Validate(r models.Record, rules []models.Rule) error {
 			continue
 		}
 
-		if err := validateFieldType(rule, val); err != nil {
+		if err := v.validateFieldType(rule, val); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateFieldType(rule models.Rule, val any) error {
+func (v *RecordValidator) validateFieldType(rule models.Rule, val any) error {
 	switch strings.ToLower(rule.Type) {
 	case "number":
 		return checkNumericRule(rule, val)
 	case "string":
-		return checkStringRule(rule, val)
+		return v.checkStringRule(rule, val)
 	case "bool", "boolean":
 		return checkBooleanRule(rule, val)
 	default:
