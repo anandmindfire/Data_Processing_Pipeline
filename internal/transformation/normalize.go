@@ -23,6 +23,7 @@ func applyStringNormalization(normalization string, val any) string {
 	}
 }
 
+// toTitleCase capitalizes the first rune of each whitespace-delimited word.
 func toTitleCase(s string) string {
 	words := strings.Fields(s)
 	for i, w := range words {

@@ -55,6 +55,7 @@ func Load() *Config {
 	return cfg
 }
 
+// loadFromFile reads default configurations from a JSON file path if accessible.
 func loadFromFile(cfg *Config) {
 	path := os.Getenv("CONFIG_PATH")
 	if path == "" {
@@ -126,6 +127,7 @@ func (c *Config) InitLogger() *slog.Logger {
 	return logger
 }
 
+// parseLogLevel converts a case-insensitive string level into a slog.Level value.
 func parseLogLevel(lvl string) slog.Level {
 	switch strings.ToLower(strings.TrimSpace(lvl)) {
 	case "debug":

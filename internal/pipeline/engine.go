@@ -120,6 +120,7 @@ func (p *Pipeline) Execute(parent context.Context, job *models.Job, onUpdate fun
 	defer cancel()
 
 	slog.Info("pipeline job started", "job_id", job.ID, "sources_count", len(cfg.Sources))
+	p.collector.IncJobsTotal()
 	now := time.Now()
 	job.Status = models.StatusRunning
 	job.Metrics.StartedAt = now
@@ -215,6 +216,7 @@ func (p *Pipeline) Execute(parent context.Context, job *models.Job, onUpdate fun
 	notify(onUpdate, job)
 }
 
+// notify triggers the onUpdate callback if provided by the caller.
 func notify(onUpdate func(*models.Job), job *models.Job) {
 	if onUpdate != nil {
 		onUpdate(job)

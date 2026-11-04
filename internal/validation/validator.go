@@ -22,6 +22,7 @@ func NewValidator() *RecordValidator {
 	return &RecordValidator{}
 }
 
+// getOrCompileRegex returns a thread-safe cached compiled regexp pattern.
 func (v *RecordValidator) getOrCompileRegex(pattern string) (*regexp.Regexp, error) {
 	if cached, ok := v.regexCache.Load(pattern); ok {
 		return cached.(*regexp.Regexp), nil

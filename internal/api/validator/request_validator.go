@@ -71,6 +71,7 @@ func (v *RequestValidator) Validate(cfg *models.Config) error {
 	return errors.Join(errs...)
 }
 
+// validateLimits verifies pipeline concurrency and buffer settings against policy boundaries.
 func (v *RequestValidator) validateLimits(cfg *models.Config) []error {
 	p := v.policy
 	var errs []error
@@ -96,6 +97,7 @@ func (v *RequestValidator) validateLimits(cfg *models.Config) []error {
 	return errs
 }
 
+// validateSources validates data source types, names, formats, and canonical paths or URLs.
 func (v *RequestValidator) validateSources(sources []models.Source) []error {
 	if len(sources) == 0 {
 		return []error{errors.New("at least one source is required")}
@@ -147,6 +149,7 @@ func (v *RequestValidator) validateSources(sources []models.Source) []error {
 	return errs
 }
 
+// validateExports checks export destinations, supported types, DLQ uniqueness, and sandboxed paths.
 func (v *RequestValidator) validateExports(cfg *models.Config) []error {
 	if len(cfg.Exports) == 0 {
 		return []error{errors.New("at least one export destination is required")}
@@ -188,6 +191,7 @@ func (v *RequestValidator) validateExports(cfg *models.Config) []error {
 	return errs
 }
 
+// validateRules ensures fields, data types, normalizations, and regex patterns in rules are valid.
 func validateRules(rules []models.Rule) []error {
 	var errs []error
 	for i, r := range rules {
@@ -213,6 +217,7 @@ func validateRules(rules []models.Rule) []error {
 	return errs
 }
 
+// validateAggregations validates aggregation fields and supported reduction operations.
 func validateAggregations(aggs []models.Aggregation) []error {
 	var errs []error
 	for i, a := range aggs {
@@ -228,6 +233,7 @@ func validateAggregations(aggs []models.Aggregation) []error {
 	return errs
 }
 
+// set converts a list of strings into a lookup set map.
 func set(vals ...string) map[string]bool {
 	m := make(map[string]bool, len(vals))
 	for _, v := range vals {

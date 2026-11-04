@@ -25,6 +25,7 @@ type sqliteSink struct {
 	columns map[string]struct{}
 }
 
+// newSQLiteSink initializes a temporary SQLite database with a base records table.
 func newSQLiteSink(path string) (*sqliteSink, error) {
 	tmp := partPath(path)
 	_ = os.Remove(tmp)
@@ -43,6 +44,7 @@ func newSQLiteSink(path string) (*sqliteSink, error) {
 	return &sqliteSink{path: path, db: db, columns: make(map[string]struct{})}, nil
 }
 
+// write alters schema for new columns dynamically and inserts records in a transaction.
 func (s *sqliteSink) write(records []models.Record) error {
 	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -98,6 +100,7 @@ func (s *sqliteSink) write(records []models.Record) error {
 	return tx.Commit()
 }
 
+// finish creates the aggregations table, inserts aggregates, closes db, and publishes the file.
 func (s *sqliteSink) finish(aggregates map[string]any) error {
 	if _, err := s.db.Exec(`CREATE TABLE aggregations (name TEXT PRIMARY KEY, result TEXT NOT NULL)`); err != nil {
 		return err
@@ -117,16 +120,19 @@ func (s *sqliteSink) finish(aggregates map[string]any) error {
 	return os.Rename(partPath(s.path), s.path)
 }
 
+// abort closes the database and removes the uncommitted temporary database file.
 func (s *sqliteSink) abort() {
 	_ = s.db.Close()
 	_ = os.Remove(partPath(s.path))
 }
 
+// artifacts returns the finalized SQLite database file path.
 func (s *sqliteSink) artifacts() []string { return []string{s.path} }
 
 // ---------------------------------------------------------------------------------------------
 // Value helpers shared by sinks.
 
+// isNumeric reports whether the value is an integer, float, or numeric JSON number.
 func isNumeric(v any) bool {
 	switch x := v.(type) {
 	case float64, float32, int, int32, int64, uint, uint32, uint64:

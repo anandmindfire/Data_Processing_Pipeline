@@ -1,5 +1,6 @@
 package constants
 
+// Job status lifecycle states.
 const (
 	StatusPending   = "PENDING"
 	StatusRunning   = "RUNNING"

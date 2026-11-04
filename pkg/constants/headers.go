@@ -1,5 +1,6 @@
 package constants
 
+// Standard HTTP header name constants.
 const (
 	HeaderContentType   = "Content-Type"
 	HeaderAuthorization = "Authorization"

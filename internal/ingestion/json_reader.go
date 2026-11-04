@@ -28,6 +28,7 @@ func readJSON(ctx context.Context, r io.Reader, max int, emit func(int, models.R
 	return streamJSONObjects(ctx, dec, max, emit)
 }
 
+// streamJSONArray decodes a top-level JSON array one object at a time.
 func streamJSONArray(ctx context.Context, dec *json.Decoder, max int, emit func(int, models.Record) error) error {
 	// Consume opening '['
 	_, err := dec.Token()
@@ -62,6 +63,7 @@ func streamJSONArray(ctx context.Context, dec *json.Decoder, max int, emit func(
 	return nil
 }
 
+// streamJSONObjects decodes concatenated JSON objects or NDJSON streams.
 func streamJSONObjects(ctx context.Context, dec *json.Decoder, max int, emit func(int, models.Record) error) error {
 	idx := 0
 	for {
@@ -90,6 +92,7 @@ func streamJSONObjects(ctx context.Context, dec *json.Decoder, max int, emit fun
 	return nil
 }
 
+// peekFirstNonWhitespace advances past leading whitespace and returns the first token byte.
 func peekFirstNonWhitespace(br *bufio.Reader) (byte, error) {
 	for {
 		b, err := br.ReadByte()

@@ -40,6 +40,7 @@ func ParseBool(v any) (bool, bool) {
 	return false, false
 }
 
+// checkRequired validates that a required field is present and non-empty.
 func checkRequired(field string, value any, ok bool) error {
 	if !ok || value == nil || strings.TrimSpace(fmt.Sprint(value)) == "" {
 		return fmt.Errorf("field %q: %w", field, ErrRequiredField)
@@ -47,6 +48,7 @@ func checkRequired(field string, value any, ok bool) error {
 	return nil
 }
 
+// validateFieldType routes type checking based on the configured rule type.
 func (v *RecordValidator) validateFieldType(rule models.Rule, val any) error {
 	switch strings.ToLower(rule.Type) {
 	case "number":

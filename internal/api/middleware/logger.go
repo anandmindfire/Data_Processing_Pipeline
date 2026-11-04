@@ -6,11 +6,13 @@ import (
 	"time"
 )
 
+// statusLoggingResponseWriter wraps http.ResponseWriter to capture the returned HTTP status code.
 type statusLoggingResponseWriter struct {
 	http.ResponseWriter
 	statusCode int
 }
 
+// WriteHeader captures the HTTP status code before delegating to the wrapped response writer.
 func (w *statusLoggingResponseWriter) WriteHeader(code int) {
 	w.statusCode = code
 	w.ResponseWriter.WriteHeader(code)

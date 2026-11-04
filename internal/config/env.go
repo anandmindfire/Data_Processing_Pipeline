@@ -121,6 +121,7 @@ func GetEnvList(key string, defaultVal []string) []string {
 	return out
 }
 
+// syncServerAddress synchronizes ServerPort and ServerAddr so host-port binds remain consistent.
 func syncServerAddress(cfg *Config) {
 	addrEnv := GetEnvFirst([]string{"ADDR", "SERVER_ADDR"}, "")
 	portEnv := GetEnvFirst([]string{"PORT", "SERVER_PORT"}, "")

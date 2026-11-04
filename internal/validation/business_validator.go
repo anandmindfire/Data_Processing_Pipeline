@@ -6,6 +6,7 @@ import (
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
+// checkNumericRule validates numeric bounds (Min and Max) on the value.
 func checkNumericRule(rule models.Rule, value any) error {
 	n, isNum := ParseNumber(value)
 	if !isNum {
@@ -20,6 +21,7 @@ func checkNumericRule(rule models.Rule, value any) error {
 	return nil
 }
 
+// checkStringRule validates string type and regular expression pattern constraints.
 func (v *RecordValidator) checkStringRule(rule models.Rule, value any) error {
 	s, isStr := value.(string)
 	if !isStr {
@@ -37,6 +39,7 @@ func (v *RecordValidator) checkStringRule(rule models.Rule, value any) error {
 	return nil
 }
 
+// checkBooleanRule validates that the value can be parsed as a boolean.
 func checkBooleanRule(rule models.Rule, value any) error {
 	_, isBool := ParseBool(value)
 	if !isBool {

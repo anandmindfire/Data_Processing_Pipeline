@@ -240,6 +240,7 @@ func (r *SQLiteRepository) Close() error {
 	return r.db.Close()
 }
 
+// inTx executes the given statement callback inside a managed transaction.
 func (r *SQLiteRepository) inTx(ctx context.Context, query string, fn func(*sql.Stmt) error) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -257,6 +258,7 @@ func (r *SQLiteRepository) inTx(ctx context.Context, query string, fn func(*sql.
 	return tx.Commit()
 }
 
+// count executes a scalar COUNT query and returns the total integer.
 func (r *SQLiteRepository) count(ctx context.Context, query string, args ...any) (int, error) {
 	var n int
 	if err := r.db.QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
@@ -265,6 +267,7 @@ func (r *SQLiteRepository) count(ctx context.Context, query string, args ...any)
 	return n, nil
 }
 
+// sqlLimit maps non-positive limits to -1 (SQLite unlimited).
 func sqlLimit(limit int) int {
 	if limit <= 0 {
 		return -1
@@ -272,6 +275,7 @@ func sqlLimit(limit int) int {
 	return limit
 }
 
+// sqliteDSN constructs an SQLite connection URI with WAL journal mode and busy timeout pragmas.
 func sqliteDSN(filePath string) string {
 	q := url.Values{}
 	q.Add("_pragma", "journal_mode(WAL)")
@@ -282,6 +286,7 @@ func sqliteDSN(filePath string) string {
 	return "file:" + filePath + "?" + q.Encode()
 }
 
+// openSQLite ensures the parent directory exists, connects to SQLite, and verifies connectivity.
 func openSQLite(ctx context.Context, filePath string, maxOpenConns int) (*sql.DB, error) {
 	dir := filepath.Dir(filePath)
 	if dir != "" && dir != "." {
@@ -347,6 +352,7 @@ CREATE INDEX IF NOT EXISTS idx_record_errors_job ON record_errors(job_id, id);
 	},
 }
 
+// migrateSQLite creates the schema migrations table and applies pending migrations sequentially.
 func migrateSQLite(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
     version    INTEGER PRIMARY KEY,
@@ -364,6 +370,7 @@ func migrateSQLite(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
+// applyOneMigration checks if a migration was already applied and executes it within a transaction.
 func applyOneMigration(ctx context.Context, db *sql.DB, m migration) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {

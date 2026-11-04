@@ -48,6 +48,7 @@ func resolveHealthCheckURL() string {
 	return fmt.Sprintf("http://127.0.0.1:%s/healthz", port)
 }
 
+// runHealthCheck queries the healthz endpoint and exits with code 0 on success or 1 on failure.
 func runHealthCheck() {
 	targetURL := resolveHealthCheckURL()
 	client := &http.Client{Timeout: 3 * time.Second}
@@ -58,6 +59,7 @@ func runHealthCheck() {
 	os.Exit(0)
 }
 
+// handleFlags processes CLI flags (--help, --version, --healthcheck) and returns true if handled.
 func handleFlags() bool {
 	if len(os.Args) <= 1 {
 		return false

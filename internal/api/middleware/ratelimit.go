@@ -38,6 +38,7 @@ func NewRateLimiter(rps float64, burst int) *RateLimiter {
 	return rl
 }
 
+// cleanupLoop periodically evicts client token buckets that have been inactive for over 10 minutes.
 func (rl *RateLimiter) cleanupLoop() {
 	defer close(rl.done)
 	ticker := time.NewTicker(5 * time.Minute)
@@ -71,6 +72,7 @@ func (rl *RateLimiter) Close() {
 	<-rl.done
 }
 
+// allow consumes a token for the given client IP, returning true if the request is permitted.
 func (rl *RateLimiter) allow(ip string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -116,6 +118,7 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	})
 }
 
+// extractIP extracts the client IP address from the X-Forwarded-For header or RemoteAddr.
 func extractIP(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		parts := strings.Split(xff, ",")

@@ -2,6 +2,7 @@ package errors
 
 import "errors"
 
+// Common sentinel domain errors returned across pipeline packages.
 var (
 	ErrCapacityReached         = errors.New("pipeline capacity reached; max active jobs running")
 	ErrJobNotFound             = errors.New("pipeline job not found")

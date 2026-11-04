@@ -34,6 +34,7 @@ func APIKeyAuth(configuredKey string) func(http.Handler) http.Handler {
 	}
 }
 
+// isPublicRoute reports whether a request path bypasses API key authentication.
 func isPublicRoute(path string) bool {
 	return path == "/healthz" ||
 		path == "/metrics" ||
@@ -41,6 +42,7 @@ func isPublicRoute(path string) bool {
 		strings.HasPrefix(path, "/swagger")
 }
 
+// extractAPIKey pulls an API key token from X-API-Key or Bearer Authorization headers.
 func extractAPIKey(r *http.Request) string {
 	if key := r.Header.Get("X-API-Key"); key != "" {
 		return key

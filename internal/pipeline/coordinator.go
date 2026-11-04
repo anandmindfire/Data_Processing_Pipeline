@@ -101,6 +101,7 @@ func (p *Pipeline) runAggregationAndExport(
 	return exportErr
 }
 
+// exportStage batches incoming records, persists them to storage, and writes them to export sinks.
 func (p *Pipeline) exportStage(
 	ctx context.Context,
 	jobID string,

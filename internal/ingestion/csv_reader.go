@@ -43,6 +43,7 @@ func readCSV(ctx context.Context, r io.Reader, max int, emit func(int, models.Re
 	return nil
 }
 
+// buildCSVRecord maps header names to row values into a models.Record.
 func buildCSVRecord(headers []string, row []string) models.Record {
 	record := make(models.Record, len(headers))
 	for n, h := range headers {

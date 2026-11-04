@@ -9,6 +9,7 @@ import (
 	"github.com/anandmindfire/data-processing-pipeline/pkg/constants"
 )
 
+// requestIDKey represents the context key type for storing the request ID.
 type requestIDKey struct{}
 
 // RequestID attaches a unique identifier to incoming requests if not already present.

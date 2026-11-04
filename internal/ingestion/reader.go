@@ -76,6 +76,7 @@ func (r *SourceReader) Read(ctx context.Context, s models.Source, maxRecords int
 	}
 }
 
+// openStream resolves and opens a source stream from either an HTTP endpoint or a local file.
 func (r *SourceReader) openStream(ctx context.Context, s models.Source) (io.ReadCloser, error) {
 	if s.URL != "" || strings.EqualFold(s.Type, "http") || strings.EqualFold(s.Type, "api") {
 		return fetchHTTP(ctx, s, r.client, r.allowPrivate)
@@ -92,6 +93,7 @@ func (r *SourceReader) openStream(ctx context.Context, s models.Source) (io.Read
 	return nil, fmt.Errorf("source %q: %w", s.Name, ErrSourceRequired)
 }
 
+// resolveFormat infers the payload format (csv or json) from source format, path, or URL.
 func resolveFormat(s models.Source) string {
 	format := strings.ToLower(s.Format)
 	if format != "" {
