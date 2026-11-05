@@ -1,6 +1,6 @@
 [
   {
-    "id": "20261104T154047.892Z-6b84441b8f46",
+    "id": "20261105T095831.800Z-e9ae7c2511d2",
     "status": "COMPLETED",
     "config": {
       "sources": [
@@ -69,10 +69,11 @@
       "transform_workers": 4,
       "buffer_size": 64,
       "timeout_seconds": 60,
-      "batch_size": 500
+      "batch_size": 500,
+      "aggregation_workers": 1
     },
-    "created_at": "2026-11-04T15:40:47.892636Z",
-    "updated_at": "2026-11-04T21:10:47.895992+05:30",
+    "created_at": "2026-11-05T09:58:31.800842Z",
+    "updated_at": "2026-11-05T09:58:31.805145Z",
     "metrics": {
       "discovered": 7,
       "processed": 6,
@@ -80,16 +81,16 @@
       "rejected": 1,
       "exported": 6,
       "errors": 1,
-      "started_at": "2026-11-04T21:10:47.893109+05:30",
-      "ended_at": "2026-11-04T21:10:47.895992+05:30",
-      "records_per_second": 2080.9554082470345,
+      "started_at": "2026-11-05T09:58:31.801289Z",
+      "ended_at": "2026-11-05T09:58:31.805145Z",
+      "records_per_second": 1556.0165975103735,
       "stage_latency_ns": {
-        "aggregation": 60792,
-        "export": 294333,
-        "export_finalize": 1186125,
-        "ingestion": 395208,
-        "transform": 35749,
-        "validation": 35541
+        "aggregation": 13707,
+        "export": 592292,
+        "export_finalize": 1067833,
+        "ingestion": 1709584,
+        "transform": 38084,
+        "validation": 77333
       }
     },
     "results_path": "/app/exports/employees.json",
@@ -111,6 +112,7 @@
         "engineering": 365000,
         "sales": 265000
       }
-    }
+    },
+    "owner": "pipeline-1"
   }
 ]

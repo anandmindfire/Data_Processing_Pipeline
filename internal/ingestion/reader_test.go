@@ -223,9 +223,47 @@ func TestSourceReaderTable(t *testing.T) {
 
 func TestCSVToleratesStrayQuotesInHeader(t *testing.T) {
 	var got []models.Record
-	err := readCSV(context.Background(), strings.NewReader("\"Index\", Height(Inches)\", \"Weight(Pounds)\"\n1, 65.78, 112.99\n"), 0,
+	err := readCSV(context.Background(), strings.NewReader("\"Index\", Height(Inches)\", \"Weight(Pounds)\"\n1, 65.78, 112.99\n"), 0, csvOptions{hasHeader: true, delimiter: ','},
 		func(_ int, r models.Record) error { got = append(got, r); return nil })
 	if err != nil || len(got) != 1 || got[0]["Height(Inches)"] != "65.78" || got[0]["Index"] != "1" || got[0]["Weight(Pounds)"] != "112.99" {
 		t.Fatalf("unexpected parse: %v %+v", err, got)
+	}
+}
+
+func TestCSVHeaderlessColumnsAndDelimiter(t *testing.T) {
+	collect := func(input string, opts csvOptions) []models.Record {
+		t.Helper()
+		var out []models.Record
+		if err := readCSV(context.Background(), strings.NewReader(input), 0, opts,
+			func(_ int, r models.Record) error { out = append(out, r); return nil }); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	// Iris-style file: no header, explicit column names, trailing blank line.
+	iris := "5.1,3.5,1.4,0.2,Iris-setosa\n6.3,3.3,6.0,2.5,Iris-virginica\n\n"
+	got := collect(iris, csvOptions{columns: []string{"sepal_length", "sepal_width", "petal_length", "petal_width", "class"}, delimiter: ','})
+	if len(got) != 2 || got[0]["sepal_length"] != "5.1" || got[1]["class"] != "Iris-virginica" {
+		t.Fatalf("headerless with columns: %+v", got)
+	}
+
+	// No header and no columns: generated names.
+	got = collect("1,2\n3,4\n", csvOptions{delimiter: ','})
+	if len(got) != 2 || got[0]["col_1"] != "1" || got[1]["col_2"] != "4" {
+		t.Fatalf("generated columns: %+v", got)
+	}
+
+	// Header present but renamed via columns; semicolon delimiter; ragged row tolerated.
+	got = collect("a;b\n1;2\n3\n", csvOptions{hasHeader: true, columns: []string{"x", "y"}, delimiter: ';'})
+	if len(got) != 2 || got[0]["x"] != "1" || got[0]["y"] != "2" || got[1]["x"] != "3" {
+		t.Fatalf("columns override + delimiter: %+v", got)
+	}
+
+	// Source options wiring.
+	no := false
+	o := csvOptionsFor(models.Source{HasHeader: &no, Delimiter: "\t", Columns: []string{"k"}})
+	if o.hasHeader || o.delimiter != '\t' || o.columns[0] != "k" {
+		t.Fatalf("csvOptionsFor: %+v", o)
 	}
 }

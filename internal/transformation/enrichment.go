@@ -25,7 +25,7 @@ func applyNumericTransformation(rule models.Rule, val any) (any, error) {
 // applyDefaultEnrichment injects fallback values when a field is missing or empty.
 func applyDefaultEnrichment(out models.Record, rule models.Rule) any {
 	val, ok := out[rule.Field]
-	if (!ok || val == nil || val == "") && rule.Default != nil {
+	if (!ok || validation.IsBlank(val)) && rule.Default != nil {
 		out[rule.Field] = rule.Default
 		return rule.Default
 	}

@@ -46,7 +46,9 @@ func (v *RecordValidator) Validate(r models.Record, rules []models.Rule) error {
 				return err
 			}
 		}
-		if !ok || val == nil {
+		// Missing or blank optional values (empty CSV cells, JSON null) are not errors: type and
+		// business rules only apply to values that are present.
+		if !ok || IsBlank(val) {
 			continue
 		}
 

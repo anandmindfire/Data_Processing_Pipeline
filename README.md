@@ -95,6 +95,11 @@ flowchart LR
 5. **Export (Streaming, Multi-Sink):** A single export goroutine batches records (`batch_size`, default 500), persists each batch to the job store in one transaction, and streams it to every export target. Aggregations are written into the SQLite database / SQL dump, and as a `<name>.aggregations.json` sidecar for JSON/CSV exports. Quarantined records can be written to a dead-letter file (`dlq_path`).
 6. **Side channels:** `errorCh` feeds one error-collector goroutine (batched persistence); `progressCh` feeds one progress-tracker goroutine that owns the job metrics and persists live snapshots.
 
+Assignment channel names map to the code (`internal/pipeline/channels.go`) as follows:
+`recordsCh` → `Raw`, `validatedCh` → `Valid`, `transformedCh` → `Transformed`,
+`resultCh` → `Result`, `errorCh` → `Errors`, `progressCh` → `Progress`, and
+`partialAggCh` → `finalAggCh` → the partials channel merged in `coordinator.go`.
+
 ---
 
 ## Technology Stack
@@ -313,38 +318,54 @@ curl -sS -X POST http://localhost:8080/api/v1/pipelines \
 }
 ```
 
-#### 2. "Global Daily Report": CSV URL + CoinGecko + Open-Meteo
-The assignment's mixed-source example, using live public APIs ([samples/global_daily_report.json](samples/global_daily_report.json)):
+#### 2. "Global Daily Report": COVID CSV + CoinGecko + Open-Meteo
+The assignment's example end-to-end flow, using the live public sources
+([samples/global_daily_report.json](samples/global_daily_report.json)): 3 ingestion goroutines,
+5 validation and 5 transform workers, 1 aggregator, 1 export goroutine, 1 progress tracker and
+1 error collector, exporting to JSON + CSV files and a SQLite database.
 
 ```bash
 curl -sS -X POST http://localhost:8080/api/v1/pipelines \
-  -H "Content-Type: application/json" \
+  -H "Content-Type: application/json" -H "X-API-Key: $API_KEY" \
   -d @samples/global_daily_report.json
 ```
 
-It shows the features that make heterogeneous sources work together:
-
-| Feature | Spec field | Used for |
-| :--- | :--- | :--- |
-| Remote CSV | `"type": "csv", "url": ...` | `hw_200.csv` population sample (malformed header quotes are tolerated) |
-| Nested JSON | `"records_path": "current_weather"` | Open-Meteo wraps the reading in an object; `results` would select RandomUser's array |
-| Field mapping | `"rename": "price_usd"` | Give each source's fields report-friendly names |
-| Origin tagging | `"include_source_field": true` | Adds `_source`, so `group_by: "_source"` counts records per source |
-| Parallel aggregation | `"aggregation_workers": 2` | Partial aggregators merged at the end |
-
-Recorded result (aggregates abbreviated):
+Recorded result (5,000 COVID rows via `max_records`, 0 rejected, about 2 s; aggregates abbreviated):
 
 ```json
 {
-  "records_per_source": {"population-csv": 200, "crypto-prices": 20, "weather-now": 1},
-  "avg_height_in": {"_all": 67.95},
-  "total_price_usd": {"_all": 86087.51},
-  "best_crypto_change_24h_pct": {"_all": 5.95},
-  "temperature_c": {"_all": 27.6}
+  "records_per_source": {"covid-csv": 5000, "crypto-prices": 20, "weather-now": 1},
+  "cases_by_location": {"Afghanistan": 235214, "Africa": 13146831, "Albania": 335047},
+  "deaths_by_location": {"Afghanistan": 7998, "Africa": 259121, "Albania": 3605},
+  "total_price_usd": {"_all": 86030.62},
+  "temperature_c": {"_all": 28.5}
 }
 ```
 
-`samples/mixed_job.json` is an offline variant (local CSV + JSON) grouped by `_source`.
+The OWID file moved from `covid.ourworldindata.org` (no longer resolves) to the GitHub-hosted
+copy used in the sample.
+
+[samples/public_sources_job.json](samples/public_sources_job.json) runs the other suggested
+datasets in one job: the headerless UCI **Iris** file, `hw_200.csv`, **JSONPlaceholder** posts and
+**RandomUser**. Recorded result: 460 records, 0 rejected; average petal length per species
+`{"iris-setosa": 1.464, "iris-versicolor": 4.26, "iris-virginica": 5.552}`.
+
+Source options that make real-world data work:
+
+| Feature | Spec field | Used for |
+| :--- | :--- | :--- |
+| Remote CSV | `"type": "csv", "url": ...` | COVID, `hw_200.csv`, Iris (stray quotes and ragged rows are tolerated) |
+| Headerless CSV | `"has_header": false, "columns": [...]` | Iris has no header row; without `columns` names are `col_1`, `col_2`, … |
+| Other separators | `"delimiter": ";"` | Semicolon- or tab-separated files |
+| Nested JSON | `"records_path": "current_weather"` | Open-Meteo wraps the reading in an object; `"results"` selects RandomUser's array |
+| Blank cells | *(automatic)* | Empty optional values become `null` instead of rejecting the record |
+| Field mapping | `"rename": "cases"` | Give each source's fields report-friendly names |
+| Origin tagging | `"include_source_field": true` | Adds `_source`, so `group_by: "_source"` counts records per source |
+| Parallel aggregation | `"aggregation_workers": 2` | Partial aggregators merged at the end |
+
+`count` behaves like SQL `COUNT(field)`: records without the field are not counted, so groups in
+mixed-source jobs are not polluted by other sources. `samples/mixed_job.json` is an offline
+variant (local CSV + JSON).
 
 #### 3. Poll Real-Time Progress & Latencies
 ```bash

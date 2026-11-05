@@ -1126,6 +1126,24 @@
             "type": "string",
             "example": "results",
             "description": "JSON only: dot path to the records inside the document, e.g. `results` (RandomUser) or `current_weather` (Open-Meteo). Points to an array of objects or a single object."
+          },
+          "has_header": {
+            "type": "boolean",
+            "default": true,
+            "description": "CSV only. Set false for files without a header row (e.g. UCI Iris)."
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "CSV only. Column names; replace the header, or name a headerless file (default col_1, col_2, ...)."
+          },
+          "delimiter": {
+            "type": "string",
+            "maxLength": 1,
+            "default": ",",
+            "description": "CSV only. Field separator, e.g. \";\" or \"\\t\"."
           }
         }
       },

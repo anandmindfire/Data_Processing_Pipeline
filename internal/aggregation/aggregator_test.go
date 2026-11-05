@@ -111,3 +111,14 @@ func TestMergeMatchesSequentialAggregation(t *testing.T) {
 		}
 	}
 }
+
+func TestCountSkipsRecordsWithoutTheField(t *testing.T) {
+	agg := NewAggregator([]models.Aggregation{{GroupBy: "gender", Field: "gender", Operation: "count", Name: "by_gender"}})
+	for _, r := range []models.Record{{"gender": "f"}, {"gender": "m"}, {"gender": "f"}, {"title": "a post"}, {"gender": ""}} {
+		agg.Process(r)
+	}
+	got := agg.Finalize()["by_gender"].(map[string]float64)
+	if len(got) != 2 || got["f"] != 2 || got["m"] != 1 {
+		t.Fatalf("expected only records with a gender to be counted, got %v", got)
+	}
+}
