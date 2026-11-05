@@ -137,7 +137,7 @@ func TestPipelineLifecycleEndpoints(t *testing.T) {
 	}
 	outputPath := "out.json" // relative paths resolve inside the export directory
 
-	spec := models.Config{
+	spec := models.JobSpec{
 		Sources: []models.Source{
 			{Type: "csv", Name: "sample", Path: inputPath},
 		},
@@ -325,7 +325,7 @@ func TestAPIValidationErrors(t *testing.T) {
 	}
 
 	// Empty sources
-	cfgEmptySources := models.Config{Exports: []models.ExportTarget{{Type: "json"}}}
+	cfgEmptySources := models.JobSpec{Exports: []models.ExportTarget{{Type: "json"}}}
 	b, _ := json.Marshal(cfgEmptySources)
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/pipelines", bytes.NewReader(b))
 	rec = httptest.NewRecorder()
@@ -335,7 +335,7 @@ func TestAPIValidationErrors(t *testing.T) {
 	}
 
 	// Empty exports
-	cfgEmptyExports := models.Config{Sources: []models.Source{{Type: "csv", Path: "in.csv"}}}
+	cfgEmptyExports := models.JobSpec{Sources: []models.Source{{Type: "csv", Path: "in.csv"}}}
 	b, _ = json.Marshal(cfgEmptyExports)
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/pipelines", bytes.NewReader(b))
 	rec = httptest.NewRecorder()
@@ -447,8 +447,8 @@ func TestJobSpecSecurityAndLimits(t *testing.T) {
 	}
 	var job models.Job
 	_ = json.Unmarshal(rec.Body.Bytes(), &job)
-	if job.Config.ValidationWorkers != cfg.ValidationWorkers || job.Config.TimeoutSeconds != cfg.DefaultTimeoutSeconds {
-		t.Fatalf("expected service defaults to be applied, got %+v", job.Config)
+	if job.Spec.ValidationWorkers != cfg.ValidationWorkers || job.Spec.TimeoutSeconds != cfg.DefaultTimeoutSeconds {
+		t.Fatalf("expected service defaults to be applied, got %+v", job.Spec)
 	}
 }
 
@@ -531,5 +531,185 @@ func TestShutdownCancelsRunningJobs(t *testing.T) {
 	}
 	if rec := postJob(t, srv, `{}`); rec.Code != http.StatusBadRequest && rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("unexpected status after shutdown: %d", rec.Code)
+	}
+}
+
+func TestEdgeHardening(t *testing.T) {
+	cfg, _ := testConfig(t)
+	cfg.MaxRequestBodyBytes = 512
+	srv, _ := newTestServer(t, cfg)
+	do := func(method, path, ctype, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		if ctype != "" {
+			req.Header.Set("Content-Type", ctype)
+		}
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := do(http.MethodGet, "/readyz", "", ""); rec.Code != http.StatusOK {
+		t.Fatalf("readyz: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := do(http.MethodGet, "/healthz", "", ""); !strings.Contains(rec.Body.String(), `"version"`) {
+		t.Fatalf("healthz should report build info: %s", rec.Body.String())
+	}
+	if rec := do(http.MethodPost, "/api/v1/pipelines", "application/json", `{"sources":[],"exports":[],"validation_worker":4}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "unknown field") {
+		t.Fatalf("unknown fields must be rejected: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := do(http.MethodPost, "/api/v1/pipelines", "application/json", `{} {}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("trailing data must be rejected: %d", rec.Code)
+	}
+	if rec := do(http.MethodPost, "/api/v1/pipelines", "text/plain", `{}`); rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("expected 415, got %d", rec.Code)
+	}
+	if rec := do(http.MethodPost, "/api/v1/pipelines", "application/json", `{"sources":"`+strings.Repeat("x", 1024)+`"}`); rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d", rec.Code)
+	}
+	docs := do(http.MethodGet, "/docs", "", "")
+	if csp := docs.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "'sha256-") || strings.Contains(csp, "unsafe-inline") {
+		t.Fatalf("docs CSP should whitelist inline code by hash only: %q", csp)
+	}
+	if !strings.Contains(docs.Body.String(), `integrity="sha384-`) {
+		t.Fatal("docs assets must carry Subresource Integrity hashes")
+	}
+
+	cfg2, _ := testConfig(t)
+	cfg2.DocsEnabled = false
+	cfg2.APIKey = "a-very-long-test-api-key"
+	srv2, _ := newTestServer(t, cfg2)
+	for path, want := range map[string]int{"/docs": http.StatusNotFound, "/metrics": http.StatusUnauthorized, "/healthz": http.StatusOK, "/api/v1/pipelines": http.StatusUnauthorized} {
+		rec := httptest.NewRecorder()
+		srv2.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != want {
+			t.Fatalf("%s: expected %d, got %d", path, want, rec.Code)
+		}
+	}
+}
+
+func TestAPIKeyManagementFlow(t *testing.T) {
+	cfg, _ := testConfig(t)
+	const root = "root-admin-key-0123456789"
+	cfg.APIKey = root
+	srv, _ := newTestServer(t, cfg)
+
+	call := func(method, path, key, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		if key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
+		}
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// The admin (root) key issues an expiring key; the secret is returned once.
+	rec := call(http.MethodPost, "/api/v1/auth/keys", root, `{"name":"ci-bot","expires_in":"2h"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create key: %d %s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		ID, Key, Status, Prefix string
+		ExpiresAt               time.Time `json:"expires_at"`
+		CreatedAt               time.Time `json:"created_at"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	if !strings.HasPrefix(created.Key, "dpp_") || created.Status != "active" || created.ExpiresAt.Sub(created.CreatedAt) != 2*time.Hour {
+		t.Fatalf("unexpected created key: %+v", created)
+	}
+
+	// The generated key reaches every pipeline API ...
+	for _, path := range []string{"/api/v1/pipelines", "/metrics"} {
+		if rec := call(http.MethodGet, path, created.Key, ""); rec.Code != http.StatusOK {
+			t.Fatalf("generated key on %s: %d %s", path, rec.Code, rec.Body.String())
+		}
+	}
+	// ... but cannot manage keys (it could otherwise mint keys that outlive it).
+	if rec := call(http.MethodPost, "/api/v1/auth/keys", created.Key, `{"name":"escalate"}`); rec.Code != http.StatusForbidden {
+		t.Fatalf("generated key must not create keys: %d", rec.Code)
+	}
+
+	// Listing never exposes secrets.
+	rec = call(http.MethodGet, "/api/v1/auth/keys", root, "")
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), created.Key) || !strings.Contains(rec.Body.String(), created.Prefix) {
+		t.Fatalf("list keys: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Validation errors.
+	for _, body := range []string{
+		`{"name":"x","expires_in":"10s"}`,
+		`{"name":"x","expires_in":"99999h"}`,
+		`{"name":"x","expires_in":"1h","expires_at":"2030-01-01T00:00:00Z"}`,
+		`{"name":"x","expires_at":"2000-01-01T00:00:00Z"}`,
+		`{"name":"","expires_in":"1h"}`,
+		`{"name":"x","scope":"admin"}`,
+	} {
+		if rec := call(http.MethodPost, "/api/v1/auth/keys", root, body); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: expected 400, got %d %s", body, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Revocation takes effect immediately on this instance.
+	if rec := call(http.MethodDelete, "/api/v1/auth/keys/"+created.ID, root, ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("revoke: %d", rec.Code)
+	}
+	if rec := call(http.MethodGet, "/api/v1/pipelines", created.Key, ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked key must be rejected, got %d", rec.Code)
+	}
+	if rec := call(http.MethodDelete, "/api/v1/auth/keys/key_missing", root, ""); rec.Code != http.StatusNotFound {
+		t.Fatalf("revoke missing: %d", rec.Code)
+	}
+
+	// Without API_KEY there is no admin, so key management is refused.
+	cfg2, _ := testConfig(t)
+	srv2, _ := newTestServer(t, cfg2)
+	rec = httptest.NewRecorder()
+	srv2.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/keys", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 when API_KEY is unset, got %d", rec.Code)
+	}
+}
+
+// TestPostgresBackedServer runs a job end to end and issues a key on the PostgreSQL store.
+func TestPostgresBackedServer(t *testing.T) {
+	dsn := os.Getenv("TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_URL not set")
+	}
+	cfg, _ := testConfig(t)
+	cfg.DatabaseURL = dsn
+	cfg.APIKey = "root-admin-key-0123456789"
+	srv, deps := newTestServer(t, cfg)
+	if !cfg.UsesPostgres() {
+		t.Fatal("expected postgres store")
+	}
+
+	in := filepath.Join(cfg.InputDirs[0], "in.csv")
+	_ = os.WriteFile(in, []byte("team,amount\nA,1\nA,2\nB,x\n"), 0o644)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/pipelines", strings.NewReader(
+		`{"sources":[{"type":"csv","name":"s","path":`+strconv.Quote(in)+`}],"rules":[{"field":"amount","type":"number"}],"aggregations":[{"group_by":"team","field":"amount","operation":"sum"}],"exports":[{"type":"json"}]}`))
+	req.Header.Set("X-API-Key", cfg.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	var job models.Job
+	_ = json.Unmarshal(rec.Body.Bytes(), &job)
+	waitForJobCompletion(t, deps.Store, job.ID)
+
+	got, _, _ := deps.Store.GetJob(context.Background(), job.ID)
+	if got.Status != models.StatusCompleted || got.Metrics.Processed != 2 || got.Metrics.Rejected != 1 || got.Owner == "" {
+		t.Fatalf("unexpected job on postgres: %+v", got)
+	}
+	if _, total, _ := deps.Store.GetErrors(context.Background(), job.ID, 0, 0); total != 1 {
+		t.Fatalf("expected 1 stored error, got %d", total)
+	}
+	if _, err := deps.Keys.Create(context.Background(), "pg-key", time.Hour); err != nil {
+		t.Fatalf("create key on postgres: %v", err)
 	}
 }

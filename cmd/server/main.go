@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/anandmindfire/data-processing-pipeline/internal/bootstrap"
+	"github.com/anandmindfire/data-processing-pipeline/internal/buildinfo"
 )
 
 // resolveHealthCheckURL returns the URL the container health probe calls. It targets the local
@@ -51,9 +52,18 @@ func resolveHealthCheckURL() string {
 // runHealthCheck queries the healthz endpoint and exits with code 0 on success or 1 on failure.
 func runHealthCheck() {
 	targetURL := resolveHealthCheckURL()
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(targetURL)
-	if err != nil || resp.StatusCode != http.StatusOK {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		os.Exit(1)
+	}
+	resp, err := http.DefaultClient.Do(req) //nolint:gosec // probes the local listener; URL comes from the operator's env
+	if err != nil {
+		os.Exit(1)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
 		os.Exit(1)
 	}
 	os.Exit(0)
@@ -73,7 +83,8 @@ func handleFlags() bool {
 		fmt.Println("  --healthcheck       Run container health probe")
 		return true
 	case "--version", "-v", "-version", "version":
-		fmt.Println("pipeline-server version 1.0.0")
+		info := buildinfo.Get()
+		fmt.Printf("pipeline-server %s (commit %s, built %s, %s)\n", info.Version, info.Commit, info.BuildDate, info.GoVersion)
 		return true
 	case "--healthcheck", "-healthcheck":
 		runHealthCheck()

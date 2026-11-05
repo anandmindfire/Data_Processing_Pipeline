@@ -220,3 +220,12 @@ func TestSourceReaderTable(t *testing.T) {
 		})
 	}
 }
+
+func TestCSVToleratesStrayQuotesInHeader(t *testing.T) {
+	var got []models.Record
+	err := readCSV(context.Background(), strings.NewReader("\"Index\", Height(Inches)\", \"Weight(Pounds)\"\n1, 65.78, 112.99\n"), 0,
+		func(_ int, r models.Record) error { got = append(got, r); return nil })
+	if err != nil || len(got) != 1 || got[0]["Height(Inches)"] != "65.78" || got[0]["Index"] != "1" || got[0]["Weight(Pounds)"] != "112.99" {
+		t.Fatalf("unexpected parse: %v %+v", err, got)
+	}
+}

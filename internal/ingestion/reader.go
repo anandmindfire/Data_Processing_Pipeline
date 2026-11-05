@@ -21,6 +21,7 @@ type Reader interface {
 type SourceReader struct {
 	client       *http.Client
 	allowPrivate bool
+	maxBytes     int64
 }
 
 // ReaderOption customizes a SourceReader.
@@ -29,6 +30,11 @@ type ReaderOption func(*SourceReader)
 // WithPrivateNetworks disables the private/loopback URL pre-check (for local development only).
 func WithPrivateNetworks(allow bool) ReaderOption {
 	return func(r *SourceReader) { r.allowPrivate = allow }
+}
+
+// WithMaxSourceBytes caps how many bytes a single source may supply (<= 0 = unlimited).
+func WithMaxSourceBytes(n int64) ReaderOption {
+	return func(r *SourceReader) { r.maxBytes = n }
 }
 
 // NewReader constructs a SourceReader. When client is nil an SSRF-safe client is used.
@@ -52,6 +58,7 @@ func (r *SourceReader) Read(ctx context.Context, s models.Source, maxRecords int
 	defer func() {
 		_ = stream.Close()
 	}()
+	body := newLimitedReader(stream, r.maxBytes)
 
 	emit := func(index int, rec models.Record) error {
 		select {
@@ -68,9 +75,12 @@ func (r *SourceReader) Read(ctx context.Context, s models.Source, maxRecords int
 	format := resolveFormat(s)
 	switch format {
 	case "csv":
-		return readCSV(ctx, stream, maxRecords, emit)
-	case "json":
-		return readJSON(ctx, stream, maxRecords, emit)
+		return readCSV(ctx, body, maxRecords, emit)
+	case "json", "ndjson":
+		if s.RecordsPath != "" {
+			return readJSONAtPath(ctx, body, s.RecordsPath, maxRecords, emit)
+		}
+		return readJSON(ctx, body, maxRecords, emit)
 	default:
 		return fmt.Errorf("%w: format %q for source %q", ErrUnsupportedSourceType, format, s.Name)
 	}

@@ -84,9 +84,11 @@ func validateDestinationHost(host string) error {
 		return nil
 	}
 
-	if ips, err := net.LookupIP(host); err == nil {
-		for _, ip := range ips {
-			if isRestrictedIP(ip) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host); err == nil {
+		for _, a := range addrs {
+			if ip := a.IP; isRestrictedIP(ip) {
 				return fmt.Errorf("%w: resolved IP %s is restricted", ErrSSRFBlocked, ip.String())
 			}
 		}

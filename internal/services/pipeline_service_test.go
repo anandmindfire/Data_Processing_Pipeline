@@ -11,10 +11,14 @@ import (
 	"github.com/anandmindfire/data-processing-pipeline/internal/storage"
 )
 
-type dummyRunner struct{}
+// dummyRunner completes jobs immediately and, like the real pipeline, persists the final state.
+type dummyRunner struct{ store storage.Repository }
 
 func (d *dummyRunner) Execute(ctx context.Context, job *models.Job, onUpdate func(*models.Job)) {
 	job.Status = models.StatusCompleted
+	if d.store != nil {
+		_ = d.store.SaveJob(ctx, job)
+	}
 	if onUpdate != nil {
 		onUpdate(job)
 	}
@@ -32,12 +36,12 @@ func TestPipelineServiceLifecycle(t *testing.T) {
 	store := storage.NewMemoryRepository()
 	defer func() { _ = store.Close() }()
 
-	svc := NewPipelineService(cfg, store, &dummyRunner{})
+	svc := NewPipelineService(cfg, store, &dummyRunner{store: store})
 
 	ctx := context.Background()
 
 	// 1. SubmitJob
-	jobCfg := models.Config{
+	jobCfg := models.JobSpec{
 		Sources: []models.Source{{Type: "csv", Path: "test.csv"}},
 	}
 	job, err := svc.SubmitJob(ctx, jobCfg)
@@ -94,7 +98,7 @@ func TestPipelineServiceLifecycle(t *testing.T) {
 	}
 
 	// 7. CancelJob
-	_ = svc.CancelJob(job.ID)
+	_ = svc.CancelJob(ctx, job.ID)
 
 	// Wait briefly for job to reach terminal state before deletion
 	for i := 0; i < 20; i++ {

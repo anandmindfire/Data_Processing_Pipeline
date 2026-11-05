@@ -3,6 +3,7 @@ package ingestion
 import (
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -14,6 +15,10 @@ import (
 func readCSV(ctx context.Context, r io.Reader, max int, emit func(int, models.Record) error) error {
 	cr := csv.NewReader(r)
 	cr.TrimLeadingSpace = true
+	// Real-world CSVs often contain stray quotes (e.g. `"Index", Height(Inches)"`); accept them
+	// rather than failing the whole source.
+	cr.LazyQuotes = true
+	cr.ReuseRecord = false
 
 	headers, err := cr.Read()
 	if err != nil {
@@ -28,7 +33,7 @@ func readCSV(ctx context.Context, r io.Reader, max int, emit func(int, models.Re
 		}
 
 		row, err := cr.Read()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
@@ -48,8 +53,13 @@ func buildCSVRecord(headers []string, row []string) models.Record {
 	record := make(models.Record, len(headers))
 	for n, h := range headers {
 		if n < len(row) {
-			record[strings.TrimSpace(h)] = strings.TrimSpace(row[n])
+			record[cleanHeader(h)] = strings.TrimSpace(row[n])
 		}
 	}
 	return record
+}
+
+// cleanHeader trims whitespace and stray surrounding quotes from a header cell.
+func cleanHeader(h string) string {
+	return strings.Trim(strings.TrimSpace(h), `"' `)
 }

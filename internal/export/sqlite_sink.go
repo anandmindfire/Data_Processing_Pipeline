@@ -10,8 +10,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/anandmindfire/data-processing-pipeline/internal/models"
+	// Registers the pure-Go (CGO-free) "sqlite" database/sql driver.
 	_ "modernc.org/sqlite"
+
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 // sqliteSink writes records into a real SQLite database file through database/sql.
@@ -36,7 +38,7 @@ func newSQLiteSink(path string) (*sqliteSink, error) {
 		return nil, fmt.Errorf("%w: open sqlite export %q: %w", ErrExportFailed, path, err)
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(`CREATE TABLE records (_row_id INTEGER PRIMARY KEY AUTOINCREMENT)`); err != nil {
+	if _, err := db.ExecContext(context.Background(), `CREATE TABLE records (_row_id INTEGER PRIMARY KEY AUTOINCREMENT)`); err != nil {
 		_ = db.Close()
 		_ = os.Remove(tmp)
 		return nil, fmt.Errorf("%w: create records table: %w", ErrExportFailed, err)
@@ -82,7 +84,8 @@ func (s *sqliteSink) write(records []models.Record) error {
 			for i, k := range keys {
 				cols[i] = quoteIdent(k)
 			}
-			q := fmt.Sprintf("INSERT INTO records (%s) VALUES (%s)", strings.Join(cols, ", "),
+			// Identifiers are quoted with quoteIdent and values are bound as parameters.
+			q := fmt.Sprintf("INSERT INTO records (%s) VALUES (%s)", strings.Join(cols, ", "), //nolint:gosec // see above
 				strings.TrimSuffix(strings.Repeat("?, ", len(keys)), ", "))
 			if stmt, err = tx.PrepareContext(ctx, q); err != nil {
 				return err
@@ -102,7 +105,7 @@ func (s *sqliteSink) write(records []models.Record) error {
 
 // finish creates the aggregations table, inserts aggregates, closes db, and publishes the file.
 func (s *sqliteSink) finish(aggregates map[string]any) error {
-	if _, err := s.db.Exec(`CREATE TABLE aggregations (name TEXT PRIMARY KEY, result TEXT NOT NULL)`); err != nil {
+	if _, err := s.db.ExecContext(context.Background(), `CREATE TABLE aggregations (name TEXT PRIMARY KEY, result TEXT NOT NULL)`); err != nil {
 		return err
 	}
 	for _, name := range sortedKeys(aggregates) {
@@ -110,7 +113,7 @@ func (s *sqliteSink) finish(aggregates map[string]any) error {
 		if err != nil {
 			return err
 		}
-		if _, err := s.db.Exec(`INSERT INTO aggregations (name, result) VALUES (?, ?)`, name, string(b)); err != nil {
+		if _, err := s.db.ExecContext(context.Background(), `INSERT INTO aggregations (name, result) VALUES (?, ?)`, name, string(b)); err != nil {
 			return err
 		}
 	}

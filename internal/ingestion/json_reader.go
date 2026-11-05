@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
@@ -14,7 +15,7 @@ import (
 func readJSON(ctx context.Context, r io.Reader, max int, emit func(int, models.Record) error) error {
 	br := bufio.NewReader(r)
 	firstByte, err := peekFirstNonWhitespace(br)
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		return nil
 	}
 	if err != nil {
@@ -79,7 +80,7 @@ func streamJSONObjects(ctx context.Context, dec *json.Decoder, max int, emit fun
 
 		var rec map[string]any
 		if err := dec.Decode(&rec); err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return fmt.Errorf("%w: decode object %d: %w", ErrInvalidFormat, idx+1, err)

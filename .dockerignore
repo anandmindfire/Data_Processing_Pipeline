@@ -1,32 +1,32 @@
-# Version control
+# Only what the build needs is sent to the Docker daemon.
 .git
 .gitignore
-
-# CI & GitHub
 .github
-
-# Documentation & tests
-docs
-test
-testdata
-*.md
-LICENSE
-
-# Binaries & build artifacts
-bin
-exports
-*.out
-*.log
-*.prof
-
-# Local configuration & secrets
-.env
-.env.*
-!.env.example
-
-# IDE & OS files
+.githooks
+.lefthook.yml
+.golangci.yml
 .idea
 .vscode
 .DS_Store
 Thumbs.db
 
+# Docs and tests (tests run in CI, not in the image build)
+docs
+test
+*.md
+LICENSE
+
+# Build artifacts and runtime data
+bin
+data
+exports
+inputs
+*.out
+*.log
+*.prof
+coverage*
+
+# Local configuration & secrets
+.env
+.env.*
+!.env.example

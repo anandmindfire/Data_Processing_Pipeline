@@ -23,7 +23,7 @@ func TestCreatePipelineRequestToConfig(t *testing.T) {
 		DLQPath:           "dlq.json",
 	}
 
-	cfg := req.ToConfig()
+	cfg := req.ToSpec()
 	if len(cfg.Sources) != 1 || cfg.Sources[0].Name != "source-1" {
 		t.Fatalf("unexpected sources: %+v", cfg.Sources)
 	}
@@ -35,7 +35,7 @@ func TestCreatePipelineRequestToConfig(t *testing.T) {
 	reqAlias := request.CreatePipelineRequest{
 		DeadLetterPath: "fallback-dlq.json",
 	}
-	cfgAlias := reqAlias.ToConfig()
+	cfgAlias := reqAlias.ToSpec()
 	if cfgAlias.DLQPath != "fallback-dlq.json" {
 		t.Fatalf("expected DLQPath fallback-dlq.json from DeadLetterPath alias, got %s", cfgAlias.DLQPath)
 	}

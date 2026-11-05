@@ -4,6 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,7 +38,7 @@ func TestPipelineDirectExecution(t *testing.T) {
 		ID:        "direct-job",
 		Status:    models.StatusPending,
 		CreatedAt: time.Now(),
-		Config: models.Config{
+		Spec: models.JobSpec{
 			Sources: []models.Source{{Type: "csv", Name: "test-src", Path: csvPath}},
 			Rules: []models.Rule{
 				{Field: "dept", Type: "string", Required: true},
@@ -98,7 +101,7 @@ func TestLiveProgressIsPersistedWhileRunning(t *testing.T) {
 		export.NewExporter(dir), store, metrics.NewCollector(),
 		WithProgressInterval(10*time.Millisecond), WithFlushInterval(5*time.Millisecond))
 
-	job := &models.Job{ID: "live", CreatedAt: time.Now(), Config: models.Config{
+	job := &models.Job{ID: "live", CreatedAt: time.Now(), Spec: models.JobSpec{
 		Sources: []models.Source{{Type: "json", Name: "slow"}},
 		Exports: []models.ExportTarget{{Type: "json"}},
 	}}
@@ -126,5 +129,50 @@ func TestLiveProgressIsPersistedWhileRunning(t *testing.T) {
 	got, _, _ := store.GetJob(context.Background(), "live")
 	if got.Status != models.StatusCompleted || got.Metrics.Processed != 50 || got.Metrics.EndedAt == nil {
 		t.Fatalf("unexpected final job state: %+v", got)
+	}
+}
+
+func TestParallelAggregationAndSourceTagging(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.csv")
+	b := filepath.Join(dir, "b.json")
+	var sb strings.Builder
+	sb.WriteString("team,amount\n")
+	for i := 0; i < 3000; i++ {
+		sb.WriteString([]string{"red", "blue"}[i%2] + "," + strconv.Itoa(i%50) + "\n")
+	}
+	_ = os.WriteFile(a, []byte(sb.String()), 0o644)
+	_ = os.WriteFile(b, []byte(`[{"team":"red","amount":1000},{"team":"green","amount":5}]`), 0o644)
+
+	run := func(workers int) *models.Job {
+		job := &models.Job{ID: "agg-" + strconv.Itoa(workers), CreatedAt: time.Now(), Spec: models.JobSpec{
+			Sources: []models.Source{{Type: "csv", Name: "csv", Path: a}, {Type: "json", Name: "api", Path: b}},
+			Rules:   []models.Rule{{Field: "amount", Type: "number", Required: true}},
+			Aggregations: []models.Aggregation{
+				{GroupBy: "team", Field: "amount", Operation: "sum", Name: "sum"},
+				{GroupBy: "team", Field: "amount", Operation: "max", Name: "max"},
+				{GroupBy: "_source", Field: "amount", Operation: "count", Name: "per_source"},
+			},
+			Exports:            []models.ExportTarget{{Type: "json"}},
+			AggregationWorkers: workers,
+			IncludeSourceField: true,
+		}}
+		newTestPipeline(storage.NewMemoryRepository(), dir).Execute(context.Background(), job, nil)
+		if job.Status != models.StatusCompleted {
+			t.Fatalf("workers=%d: status %s (%s)", workers, job.Status, job.Error)
+		}
+		return job
+	}
+
+	seq, par := run(1), run(4)
+	if !reflect.DeepEqual(seq.Aggregates, par.Aggregates) {
+		t.Fatalf("parallel aggregates differ:\nseq=%v\npar=%v", seq.Aggregates, par.Aggregates)
+	}
+	perSource := par.Aggregates["per_source"].(map[string]float64)
+	if perSource["csv"] != 3000 || perSource["api"] != 2 {
+		t.Fatalf("expected per-source counts via _source, got %v", perSource)
+	}
+	if par.Aggregates["max"].(map[string]float64)["red"] != 1000 {
+		t.Fatalf("unexpected max: %v", par.Aggregates["max"])
 	}
 }

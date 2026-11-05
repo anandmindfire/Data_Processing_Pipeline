@@ -5,12 +5,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/anandmindfire/data-processing-pipeline/internal/api/controllers"
 	"github.com/go-chi/chi/v5"
+
+	"github.com/anandmindfire/data-processing-pipeline/internal/api/handlers"
 )
 
 func TestRegisterRoutesCustomBasePath(t *testing.T) {
-	ctrl := &controllers.PipelineController{}
+	ctrl := &handlers.PipelineHandler{}
 
 	tests := []struct {
 		name       string
@@ -43,18 +44,9 @@ func TestRegisterRoutesCustomBasePath(t *testing.T) {
 				RegisterRoutes(r, ctrl)
 			}
 
-			// Verify healthz is always registered at root
-			req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-			rec := httptest.NewRecorder()
-			r.ServeHTTP(rec, req)
-			// Health will panic or execute because ctrl service is nil, but routing should NOT return 404
-			if rec.Code == http.StatusNotFound {
-				t.Errorf("expected route /healthz to be registered, got 404")
-			}
-
 			// Verify configured pipeline path route match (options or get)
-			req = httptest.NewRequest(http.MethodGet, tt.targetPath, nil)
-			rec = httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, tt.targetPath, nil)
+			rec := httptest.NewRecorder()
 			// Will invoke ctrl.List or fail inside handler, but MUST NOT be 404 Not Found
 			defer func() { _ = recover() }()
 			r.ServeHTTP(rec, req)

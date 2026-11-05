@@ -108,3 +108,16 @@ func TestErrorResponses(t *testing.T) {
 		t.Fatalf("failed marshaling ErrorsListResponse: %v", err)
 	}
 }
+
+func TestFromJobRedactsSourceHeaders(t *testing.T) {
+	job := &models.Job{ID: "j", Spec: models.JobSpec{Sources: []models.Source{
+		{Name: "api", URL: "https://x.test", Headers: map[string]string{"Authorization": "Bearer secret"}},
+	}}}
+	resp := response.FromJob(job)
+	if got := resp.Config.Sources[0].Headers["Authorization"]; got != models.RedactedHeaderValue {
+		t.Fatalf("expected redacted header, got %q", got)
+	}
+	if job.Spec.Sources[0].Headers["Authorization"] != "Bearer secret" {
+		t.Fatal("redaction must not mutate the job used by the pipeline")
+	}
+}

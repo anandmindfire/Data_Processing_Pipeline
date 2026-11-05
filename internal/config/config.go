@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -38,12 +39,53 @@ type Config struct {
 	AllowPrivateSources bool     `json:"allow_private_sources"`
 
 	// Per-job resource limits enforced when a job is submitted.
-	MaxWorkersPerStage   int `json:"max_workers_per_stage"`
-	MaxBufferSize        int `json:"max_buffer_size"`
-	MaxBatchSize         int `json:"max_batch_size"`
-	MaxJobTimeoutSeconds int `json:"max_job_timeout_seconds"`
-	MaxSourcesPerJob     int `json:"max_sources_per_job"`
-	MaxExportsPerJob     int `json:"max_exports_per_job"`
+	MaxWorkersPerStage    int   `json:"max_workers_per_stage"`
+	MaxBufferSize         int   `json:"max_buffer_size"`
+	MaxBatchSize          int   `json:"max_batch_size"`
+	MaxJobTimeoutSeconds  int   `json:"max_job_timeout_seconds"`
+	MaxSourcesPerJob      int   `json:"max_sources_per_job"`
+	MaxExportsPerJob      int   `json:"max_exports_per_job"`
+	MaxSourceBytes        int64 `json:"max_source_bytes"` // per source (file or HTTP body)
+	MaxAggregationWorkers int   `json:"max_aggregation_workers"`
+
+	// HTTP edge hardening.
+	RequestTimeout     time.Duration `json:"request_timeout"`      // per API request
+	TrustedProxies     []string      `json:"trusted_proxies"`      // CIDRs allowed to set X-Forwarded-For
+	CORSAllowedOrigins []string      `json:"cors_allowed_origins"` // empty = CORS disabled; "*" = any origin
+	MetricsPublic      bool          `json:"metrics_public"`       // serve /metrics without the API key
+	DocsEnabled        bool          `json:"docs_enabled"`         // serve Swagger UI and the OpenAPI spec
+
+	// Storage backend. Empty DatabaseURL = embedded SQLite in DataDir (single instance);
+	// a postgres:// URL enables multi-replica deployments.
+	DatabaseURL    string        `json:"-"` // may contain credentials; never serialized
+	DBMaxOpenConns int           `json:"db_max_open_conns"`
+	DBMaxIdleConns int           `json:"db_max_idle_conns"`
+	DBConnLifetime time.Duration `json:"db_conn_max_lifetime"`
+	InstanceID     string        `json:"instance_id"` // replica identity (default hostname-random)
+	JobLease       time.Duration `json:"job_lease"`   // jobs not heartbeated for this long are failed
+
+	// API key management.
+	APIKeyDefaultTTL time.Duration `json:"api_key_default_ttl"`
+	APIKeyMaxTTL     time.Duration `json:"api_key_max_ttl"`
+	MaxAPIKeys       int           `json:"max_api_keys"`
+
+	// Data lifecycle.
+	JobRetention time.Duration `json:"job_retention"` // finished jobs older than this are purged (0 = keep forever)
+}
+
+// minAPIKeyLength is the shortest API key accepted, to rule out trivially guessable keys.
+const minAPIKeyLength = 16
+
+// APIKeys returns the configured API keys. API_KEY may hold a comma-separated list so keys can
+// be rotated without downtime (add the new key, roll clients, remove the old key).
+func (c *Config) APIKeys() []string {
+	var keys []string
+	for _, k := range strings.Split(c.APIKey, ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			keys = append(keys, k)
+		}
+	}
+	return keys
 }
 
 // Load loads configuration from .env, optional JSON config file, and env overrides.
@@ -70,7 +112,7 @@ func loadFromFile(cfg *Config) {
 		path = "internal/config/default.json"
 	}
 
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // CONFIG_PATH is operator-controlled configuration, not request input
 	if err != nil {
 		return
 	}
@@ -79,33 +121,59 @@ func loadFromFile(cfg *Config) {
 
 // Validate verifies that the configuration values are sound.
 func (c *Config) Validate() error {
-	if c.MaxActiveJobs <= 0 {
-		return fmt.Errorf("max_active_jobs must be greater than 0")
-	}
-	if c.DefaultTimeoutSeconds <= 0 {
-		return fmt.Errorf("default_timeout_seconds must be greater than 0")
-	}
-	if c.RateLimitRPS <= 0 {
-		return fmt.Errorf("rate_limit_rps must be greater than 0")
-	}
-	if c.RateLimitBurst <= 0 {
-		return fmt.Errorf("rate_limit_burst must be greater than 0")
-	}
-	if c.MaxWorkersPerStage <= 0 || c.MaxBufferSize <= 0 || c.MaxBatchSize <= 0 ||
-		c.MaxJobTimeoutSeconds <= 0 || c.MaxSourcesPerJob <= 0 || c.MaxExportsPerJob <= 0 {
-		return fmt.Errorf("per-job limits must be greater than 0")
-	}
-	if c.ValidationWorkers > c.MaxWorkersPerStage || c.TransformWorkers > c.MaxWorkersPerStage {
-		return fmt.Errorf("default worker counts must not exceed max_workers_per_stage (%d)", c.MaxWorkersPerStage)
-	}
-	if c.BufferSize > c.MaxBufferSize {
-		return fmt.Errorf("default buffer_size must not exceed max_buffer_size (%d)", c.MaxBufferSize)
-	}
-	if c.DefaultTimeoutSeconds > c.MaxJobTimeoutSeconds {
-		return fmt.Errorf("default_timeout_seconds must not exceed max_job_timeout_seconds (%d)", c.MaxJobTimeoutSeconds)
+	return errors.Join(c.validateSecurity(), c.validateServer(), c.validateJobLimits())
+}
+
+func (c *Config) validateSecurity() error {
+	for _, k := range c.APIKeys() {
+		if len(k) < minAPIKeyLength {
+			return fmt.Errorf("every API key must be at least %d characters long", minAPIKeyLength)
+		}
 	}
 	if strings.TrimSpace(c.DataDir) == "" || strings.TrimSpace(c.ExportDir) == "" {
-		return fmt.Errorf("data_dir and export_dir are required")
+		return errors.New("data_dir and export_dir are required")
+	}
+	return nil
+}
+
+// UsesPostgres reports whether the shared PostgreSQL store is configured.
+func (c *Config) UsesPostgres() bool {
+	return strings.HasPrefix(c.DatabaseURL, "postgres://") || strings.HasPrefix(c.DatabaseURL, "postgresql://")
+}
+
+func (c *Config) validateServer() error {
+	switch {
+	case c.DatabaseURL != "" && !c.UsesPostgres():
+		return errors.New("DATABASE_URL must be a postgres:// or postgresql:// URL")
+	case c.JobLease < 5*time.Second:
+		return errors.New("job_lease must be at least 5s")
+	case c.APIKeyDefaultTTL <= 0 || c.APIKeyMaxTTL < c.APIKeyDefaultTTL || c.MaxAPIKeys <= 0:
+		return errors.New("api_key_default_ttl must be > 0 and <= api_key_max_ttl, and max_api_keys > 0")
+	case c.MaxActiveJobs <= 0:
+		return errors.New("max_active_jobs must be greater than 0")
+	case c.RateLimitRPS <= 0 || c.RateLimitBurst <= 0:
+		return errors.New("rate_limit_rps and rate_limit_burst must be greater than 0")
+	case c.RequestTimeout <= 0:
+		return errors.New("request_timeout must be greater than 0")
+	case c.JobRetention < 0:
+		return errors.New("job_retention must not be negative")
+	}
+	return nil
+}
+
+func (c *Config) validateJobLimits() error {
+	switch {
+	case c.MaxWorkersPerStage <= 0 || c.MaxBufferSize <= 0 || c.MaxBatchSize <= 0 || c.MaxJobTimeoutSeconds <= 0 ||
+		c.MaxSourcesPerJob <= 0 || c.MaxExportsPerJob <= 0 || c.MaxSourceBytes <= 0 || c.MaxAggregationWorkers <= 0:
+		return errors.New("per-job limits must be greater than 0")
+	case c.DefaultTimeoutSeconds <= 0:
+		return errors.New("default_timeout_seconds must be greater than 0")
+	case c.ValidationWorkers > c.MaxWorkersPerStage || c.TransformWorkers > c.MaxWorkersPerStage:
+		return fmt.Errorf("default worker counts must not exceed max_workers_per_stage (%d)", c.MaxWorkersPerStage)
+	case c.BufferSize > c.MaxBufferSize:
+		return fmt.Errorf("default buffer_size must not exceed max_buffer_size (%d)", c.MaxBufferSize)
+	case c.DefaultTimeoutSeconds > c.MaxJobTimeoutSeconds:
+		return fmt.Errorf("default_timeout_seconds must not exceed max_job_timeout_seconds (%d)", c.MaxJobTimeoutSeconds)
 	}
 	return nil
 }

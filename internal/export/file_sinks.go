@@ -26,7 +26,7 @@ func writeAggregationsSidecar(path string, aggregates map[string]any) (string, e
 		return "", fmt.Errorf("encode aggregations: %w", err)
 	}
 	tmp := partPath(sidecar)
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o640); err != nil { //nolint:gosec // exports are meant to be group-readable by downstream consumers
 		return "", err
 	}
 	return sidecar, os.Rename(tmp, sidecar)

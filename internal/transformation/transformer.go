@@ -21,7 +21,7 @@ func NewTransformer() *RecordTransformer {
 
 // Transform applies normalization and enrichment rules immutably to a record.
 func (t *RecordTransformer) Transform(r models.Record, rules []models.Rule) (models.Record, error) {
-	out := cloneRecord(r)
+	out := r.Clone()
 
 	for _, rule := range rules {
 		val := applyDefaultEnrichment(out, rule)
@@ -46,6 +46,17 @@ func (t *RecordTransformer) Transform(r models.Record, rules []models.Rule) (mod
 
 		if rule.Normalize != "" {
 			out[rule.Field] = applyStringNormalization(rule.Normalize, out[rule.Field])
+		}
+	}
+
+	// Field mapping runs last so every rule above can refer to the original field names.
+	for _, rule := range rules {
+		if rule.Rename == "" || rule.Rename == rule.Field {
+			continue
+		}
+		if v, ok := out[rule.Field]; ok {
+			out[rule.Rename] = v
+			delete(out, rule.Field)
 		}
 	}
 	return out, nil

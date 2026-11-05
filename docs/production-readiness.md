@@ -2,6 +2,21 @@
 
 This document formalizes the architectural boundary between **Production-Oriented Code Quality** (the software engineering principles demonstrated in this codebase) and **Actual Production Deployment Readiness** (the infrastructure, distributed systems, and operational requirements needed to run mission-critical multi-instance services at cloud scale).
 
+## Current status
+
+The service is production-ready as a single instance (SQLite) **or as several replicas on PostgreSQL**. In place today:
+
+| Area | Implemented |
+| :--- | :--- |
+| Persistence | SQLite (single node) or PostgreSQL (multi-replica) behind one SQL repository; versioned migrations (advisory-locked on PostgreSQL), batched multi-row writes, retention purge |
+| Multi-replica | Job ownership + heartbeats, cross-replica cancellation, stale-job recovery after `JOB_LEASE`, shared export volume (`docker-compose.postgres.yml`) |
+| Access control | Admin key plus generated expiring API keys (hashed, revocable, listed with status and last use) |
+| Security | API keys with rotation, path sandboxes, dial-time SSRF protection, strict JSON, size/resource limits, CSP/SRI, trusted-proxy rate limiting, secret redaction (see [SECURITY.md](../SECURITY.md)) |
+| Operations | `/healthz` (liveness), `/readyz` (readiness), Prometheus metrics with build info, structured JSON logs with request IDs, graceful drain on `SIGTERM`, version via `--version` |
+| Delivery | Static distroless non-root image, read-only root FS, OCI labels; CI with blocking lint (gosec), race tests + coverage gate, govulncheck, container smoke test, Trivy; SHA-pinned actions; Dependabot |
+
+The pillars below are what remains for **multi-replica, cloud-scale** operation.
+
 ---
 
 ## 1. Defining the Boundary
@@ -30,12 +45,12 @@ This document formalizes the architectural boundary between **Production-Oriente
 │             Production Deployment Readiness                 │
 │         (Distributed Cloud Scale & Day-2 Operations)        │
 ├─────────────────────────────────────────────────────────────┤
-│  1. PostgreSQL with Connection Pooling & Migrations         │
+│  1. ✓ PostgreSQL store, multi-replica coordination           │
 │  2. S3-Compatible Object Storage with Presigned URLs        │
 │  3. Distributed Durable Job Queues (RabbitMQ/SQS/Redis)     │
 │  4. OpenTelemetry Distributed Tracing & Grafana Dashboards  │
 │  5. Distributed Rate Limiting & Multi-Tenant Quotas         │
-│  6. CI/CD Static Vulnerability & Container Scanning (Trivy) │
+│  6. Per-tenant authN/Z (OIDC / scoped keys) & audit logging │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -45,36 +60,13 @@ While our codebase exhibits **production-oriented code quality** through determi
 
 ## 2. In-Depth Blueprint: The 6 Production Pillars
 
-### 1. Move the Job Store from Embedded SQLite to PostgreSQL (multi-replica)
-* **Why it matters:** The current `storage.SQLiteRepository` (WAL mode, batched transactional writes, versioned migrations) is durable and fast on a single node, but an embedded database file cannot be shared by several replicas behind a load balancer.
-* **Production Implementation:**
-  * **Driver:** Use `jackc/pgx/v5` with connection pooling (`pgxpool.Pool`).
-  * **Relational Schema:**
-    ```sql
-    CREATE TABLE pipeline_jobs (
-        id VARCHAR(64) PRIMARY KEY,
-        status VARCHAR(32) NOT NULL,
-        config JSONB NOT NULL,
-        aggregates JSONB,
-        metrics JSONB NOT NULL,
-        results_path TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-
-    CREATE TABLE pipeline_errors (
-        id BIGSERIAL PRIMARY KEY,
-        job_id VARCHAR(64) NOT NULL REFERENCES pipeline_jobs(id) ON DELETE CASCADE,
-        source VARCHAR(128) NOT NULL,
-        row_index INT,
-        stage VARCHAR(64) NOT NULL,
-        message TEXT NOT NULL,
-        record JSONB,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    CREATE INDEX idx_errors_job ON pipeline_errors(job_id);
-    ```
-  * **Database Migrations:** Manage schema versioning using `golang-migrate/migrate` or `pressly/goose`.
+### 1. Shared Job Store on PostgreSQL — **done**
+`DATABASE_URL=postgres://…` switches the store to PostgreSQL via `pgx` (database/sql, pooled).
+The schema mirrors SQLite (`internal/storage/postgres.go`); migrations are applied under
+`pg_advisory_lock`. Replica coordination (owner, `heartbeat_at`, `cancel_requested` columns) is
+described in the README section "Scaling to Multiple Replicas". Possible next steps: JSONB
+columns for ad-hoc querying of job documents, partitioning `records` by job for very large jobs,
+and a read replica for result queries.
 
 ---
 

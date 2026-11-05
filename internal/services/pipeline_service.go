@@ -6,7 +6,6 @@ import (
 	"github.com/anandmindfire/data-processing-pipeline/internal/config"
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 	"github.com/anandmindfire/data-processing-pipeline/internal/storage"
-	pkgerrors "github.com/anandmindfire/data-processing-pipeline/pkg/errors"
 )
 
 // PipelineService coordinates all pipeline subsystem services.
@@ -39,7 +38,7 @@ type Results struct {
 }
 
 // SubmitJob delegates job submission to JobService.
-func (s *PipelineService) SubmitJob(ctx context.Context, cfg models.Config) (*models.Job, error) {
+func (s *PipelineService) SubmitJob(ctx context.Context, cfg models.JobSpec) (*models.Job, error) {
 	return s.Jobs.SubmitJob(ctx, cfg)
 }
 
@@ -54,8 +53,8 @@ func (s *PipelineService) ListJobs(ctx context.Context, opts storage.ListOptions
 }
 
 // CancelJob delegates job cancellation to JobService.
-func (s *PipelineService) CancelJob(id string) error {
-	return s.Jobs.CancelJob(id)
+func (s *PipelineService) CancelJob(ctx context.Context, id string) error {
+	return s.Jobs.CancelJob(ctx, id)
 }
 
 // Shutdown cancels running jobs and waits for them to finish.
@@ -70,7 +69,7 @@ func (s *PipelineService) DeleteJob(ctx context.Context, id string) error {
 		return err
 	}
 	if !found {
-		return pkgerrors.ErrJobNotFound
+		return ErrJobNotFound
 	}
 	if err := s.Jobs.DeleteJob(ctx, id); err != nil {
 		return err
