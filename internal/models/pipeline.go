@@ -8,6 +8,11 @@ type Source struct {
 	URL     string            `json:"url,omitempty"`     // External HTTP API endpoint
 	Headers map[string]string `json:"headers,omitempty"` // Request headers for HTTP sources
 	Format  string            `json:"format,omitempty"`  // Data format ("csv", "json")
+	// CSV only. HasHeader defaults to true; Columns names the columns (replacing the header, or
+	// naming a headerless file such as the UCI Iris data); Delimiter defaults to ",".
+	HasHeader *bool    `json:"has_header,omitempty"`
+	Columns   []string `json:"columns,omitempty"`
+	Delimiter string   `json:"delimiter,omitempty"`
 	// RecordsPath selects records inside a JSON document, e.g. "results" or "current_weather".
 	RecordsPath string `json:"records_path,omitempty"`
 }

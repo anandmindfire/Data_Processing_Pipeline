@@ -1,5 +1,5 @@
 {
-  "job_id": "20261104T154047.892Z-6b84441b8f46",
+  "job_id": "20261105T095831.800Z-e9ae7c2511d2",
   "status": "COMPLETED",
   "aggregations": {
     "employee_count": {
@@ -23,7 +23,7 @@
   ],
   "total_records": 6,
   "offset": 0,
-  "limit": 2,
+  "limit": 3,
   "records": [
     {
       "department": "sales",
@@ -34,6 +34,11 @@
       "department": "engineering",
       "name": "Alice",
       "salary": 120000
+    },
+    {
+      "department": "sales",
+      "name": "Bob",
+      "salary": 90000
     }
   ]
 }

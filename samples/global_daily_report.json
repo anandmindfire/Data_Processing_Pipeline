@@ -2,8 +2,8 @@
   "sources": [
     {
       "type": "csv",
-      "name": "population-csv",
-      "url": "https://people.sc.fsu.edu/~jburkardt/data/csv/hw_200.csv"
+      "name": "covid-csv",
+      "url": "https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/owid-covid-data.csv"
     },
     {
       "type": "http",
@@ -21,8 +21,10 @@
     }
   ],
   "rules": [
-    { "field": "Height(Inches)", "type": "number", "min": 0, "rename": "height_in" },
-    { "field": "Weight(Pounds)", "type": "number", "min": 0, "rename": "weight_lb" },
+    { "field": "location", "type": "string", "normalize": "trim" },
+    { "field": "date", "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    { "field": "new_cases", "type": "number", "min": 0, "rename": "cases" },
+    { "field": "new_deaths", "type": "number", "min": 0, "rename": "deaths" },
     { "field": "current_price", "type": "number", "min": 0, "rename": "price_usd" },
     { "field": "price_change_percentage_24h", "type": "number", "rename": "change_24h_pct" },
     { "field": "symbol", "type": "string", "normalize": "upper" },
@@ -31,22 +33,24 @@
   ],
   "aggregations": [
     { "group_by": "_source", "field": "_source", "operation": "count", "name": "records_per_source" },
-    { "field": "height_in", "operation": "avg", "name": "avg_height_in" },
-    { "field": "weight_lb", "operation": "avg", "name": "avg_weight_lb" },
+    { "group_by": "location", "field": "cases", "operation": "sum", "name": "cases_by_location" },
+    { "group_by": "location", "field": "deaths", "operation": "sum", "name": "deaths_by_location" },
+    { "field": "cases", "operation": "max", "name": "max_daily_cases" },
     { "field": "price_usd", "operation": "sum", "name": "total_price_usd" },
     { "field": "change_24h_pct", "operation": "avg", "name": "avg_crypto_change_24h_pct" },
-    { "field": "change_24h_pct", "operation": "max", "name": "best_crypto_change_24h_pct" },
     { "field": "temperature_c", "operation": "max", "name": "temperature_c" },
     { "field": "windspeed_kmh", "operation": "max", "name": "windspeed_kmh" }
   ],
   "exports": [
     { "type": "json", "path": "global_daily_report.json" },
+    { "type": "csv", "path": "global_daily_report.csv" },
     { "type": "sqlite", "path": "global_daily_report.db" }
   ],
   "include_source_field": true,
-  "validation_workers": 4,
-  "transform_workers": 4,
-  "aggregation_workers": 2,
-  "timeout_seconds": 60,
+  "max_records": 5000,
+  "validation_workers": 5,
+  "transform_workers": 5,
+  "aggregation_workers": 1,
+  "timeout_seconds": 120,
   "dlq_path": "global_daily_report.dlq.json"
 }

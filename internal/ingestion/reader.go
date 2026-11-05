@@ -75,7 +75,7 @@ func (r *SourceReader) Read(ctx context.Context, s models.Source, maxRecords int
 	format := resolveFormat(s)
 	switch format {
 	case "csv":
-		return readCSV(ctx, body, maxRecords, emit)
+		return readCSV(ctx, body, maxRecords, csvOptionsFor(s), emit)
 	case "json", "ndjson":
 		if s.RecordsPath != "" {
 			return readJSONAtPath(ctx, body, s.RecordsPath, maxRecords, emit)

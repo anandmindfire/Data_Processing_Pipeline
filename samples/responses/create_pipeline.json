@@ -1,5 +1,5 @@
 {
-  "id": "20261104T154047.892Z-6b84441b8f46",
+  "id": "20261105T095831.800Z-e9ae7c2511d2",
   "status": "PENDING",
   "config": {
     "sources": [
@@ -69,8 +69,8 @@
     "buffer_size": 64,
     "timeout_seconds": 60
   },
-  "created_at": "2026-11-04T15:40:47.892636Z",
-  "updated_at": "2026-11-04T15:40:47.892636Z",
+  "created_at": "2026-11-05T09:58:31.800842Z",
+  "updated_at": "2026-11-05T09:58:31.800842Z",
   "metrics": {
     "discovered": 0,
     "processed": 0,
@@ -81,5 +81,6 @@
     "started_at": "0001-01-01T00:00:00Z",
     "records_per_second": 0,
     "stage_latency_ns": {}
-  }
+  },
+  "owner": "pipeline-1"
 }

@@ -24,7 +24,7 @@ func TestSampleJobSpecsAreValid(t *testing.T) {
 	defer func() { _ = os.Chdir(wd) }()
 
 	v := validator.NewRequestValidator(validator.DefaultPolicy("exports", "samples"))
-	for _, name := range []string{"samples/job.json", "samples/mixed_job.json", "samples/global_daily_report.json"} {
+	for _, name := range []string{"samples/job.json", "samples/mixed_job.json", "samples/global_daily_report.json", "samples/public_sources_job.json"} {
 		b, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)

@@ -3,6 +3,8 @@ package transformation
 import (
 	"testing"
 
+	"github.com/anandmindfire/data-processing-pipeline/internal/validation"
+
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
@@ -156,5 +158,28 @@ func TestTransformRenameRunsAfterOtherRules(t *testing.T) {
 	}
 	if _, still := got["temp_c"]; still || got["temp_f"] != 212.0 || got["city"] != "PUNE" {
 		t.Fatalf("unexpected record after rename: %#v", got)
+	}
+}
+
+func TestBlankOptionalValuesAreKeptAsNull(t *testing.T) {
+	rules := []models.Rule{
+		{Field: "cases", Type: "number", Min: new(float64)},
+		{Field: "flag", Type: "boolean"},
+		{Field: "region", Type: "string", Default: "unknown"},
+		{Field: "name", Type: "string", Required: true},
+	}
+	rec := models.Record{"cases": "", "flag": "  ", "region": "", "name": "x"}
+	if err := validation.NewValidator().Validate(rec, rules); err != nil {
+		t.Fatalf("blank optional values must pass validation: %v", err)
+	}
+	got, err := NewTransformer().Transform(rec, rules)
+	if err != nil {
+		t.Fatalf("blank optional values must not fail transformation: %v", err)
+	}
+	if got["cases"] != nil || got["flag"] != nil || got["region"] != "unknown" {
+		t.Fatalf("unexpected record: %#v", got)
+	}
+	if err := validation.NewValidator().Validate(models.Record{"name": " "}, rules); err == nil {
+		t.Fatal("a blank required field must still be rejected")
 	}
 }

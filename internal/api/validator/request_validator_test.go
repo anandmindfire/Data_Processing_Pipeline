@@ -131,3 +131,30 @@ func TestValidateRulesAndAggregations(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateCSVOptions(t *testing.T) {
+	inputs, exports, _ := sandbox(t)
+	in := filepath.Join(inputs, "iris.data")
+	_ = os.WriteFile(in, []byte("5.1,3.5\n"), 0o644)
+	v := NewRequestValidator(DefaultPolicy(exports, inputs))
+	no := false
+	ok := &models.JobSpec{
+		Sources: []models.Source{{Type: "csv", Name: "iris", Path: in, HasHeader: &no, Columns: []string{"a", "b"}, Delimiter: ";"}},
+		Exports: []models.ExportTarget{{Type: "json"}},
+	}
+	if err := v.Validate(ok); err != nil {
+		t.Fatalf("valid CSV options rejected: %v", err)
+	}
+	for name, src := range map[string]models.Source{
+		"multi-char delimiter": {Type: "csv", Name: "s", Path: in, Delimiter: ";;"},
+		"quote delimiter":      {Type: "csv", Name: "s", Path: in, Delimiter: `"`},
+		"duplicate columns":    {Type: "csv", Name: "s", Path: in, Columns: []string{"a", "a"}},
+		"blank column":         {Type: "csv", Name: "s", Path: in, Columns: []string{"a", " "}},
+		"csv option on json":   {Type: "json", Name: "s", Path: in, Columns: []string{"a"}},
+	} {
+		spec := &models.JobSpec{Sources: []models.Source{src}, Exports: []models.ExportTarget{{Type: "json"}}}
+		if err := v.Validate(spec); err == nil {
+			t.Errorf("%s: expected a validation error", name)
+		}
+	}
+}
