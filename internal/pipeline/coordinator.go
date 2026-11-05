@@ -18,7 +18,7 @@ import (
 // startIngestion launches one reader goroutine per source (fan-out) and closes rawCh when all finish.
 func (p *Pipeline) startIngestion(
 	ctx context.Context,
-	cfg models.Config,
+	cfg models.JobSpec,
 	rawCh chan<- ingestion.Item,
 	progressCh chan<- progressMsg,
 	errCh chan<- models.RecordError,
@@ -57,48 +57,67 @@ func (p *Pipeline) startIngestion(
 	return &ingestFailures
 }
 
-// runAggregationAndExport runs the fan-in aggregation goroutine and the export goroutine.
+// runAggregationAndExport runs the aggregation stage and the export goroutine and returns the
+// merged aggregates together with the first export error.
 //
-// The export goroutine batches records and, per batch, persists them to the repository and
-// streams them to every export sink. It returns the first storage or sink error; after an error
-// it keeps draining so upstream stages can finish.
+// With workers == 1 a single goroutine aggregates (pure fan-in). With workers > 1 each worker
+// owns a partial aggregator (fan-out, no locks); when a worker finishes it sends its partial on
+// partialCh and one merger goroutine folds the partials into the final result (fan-in). Every
+// worker also forwards records to the export stage through ch.Result.
 func (p *Pipeline) runAggregationAndExport(
 	ctx context.Context,
 	jobID string,
-	batchSize int,
-	agg aggregation.Aggregator,
+	spec models.JobSpec,
 	session export.Session,
-	ch *PipelineChannels,
-) error {
-	var wg sync.WaitGroup
-	wg.Add(2)
+	ch *Channels,
+) (map[string]any, error) {
+	workers := max(spec.AggregationWorkers, 1)
+	partialCh := make(chan aggregation.Aggregator, workers)
 
-	go func() {
-		defer wg.Done()
-		defer close(ch.Result)
-		lat := newLatencyAccumulator(ch.Progress, "aggregation")
-		defer lat.flush()
-		for item := range ch.Transformed {
-			start := time.Now()
-			agg.Process(item.record)
-			lat.add(time.Since(start))
+	var aggWG sync.WaitGroup
+	for n := 0; n < workers; n++ {
+		aggWG.Add(1)
+		go func() {
+			defer aggWG.Done()
+			partial := aggregation.NewAggregator(spec.Aggregations)
+			defer func() { partialCh <- partial }()
+			lat := newLatencyAccumulator(ch.Progress, "aggregation")
+			defer lat.flush()
+			for item := range ch.Transformed {
+				rec := item.record
+				if spec.IncludeSourceField {
+					rec["_source"] = item.item.Source // rec is the transformer's private copy
+				}
+				start := time.Now()
+				partial.Process(rec)
+				lat.add(time.Since(start))
 
-			select {
-			case ch.Result <- item.record:
-			case <-ctx.Done():
-				return
+				select {
+				case ch.Result <- rec:
+				case <-ctx.Done():
+					return
+				}
 			}
+		}()
+	}
+	go func() {
+		aggWG.Wait()
+		close(ch.Result)
+		close(partialCh)
+	}()
+
+	final := aggregation.NewAggregator(spec.Aggregations)
+	mergeDone := make(chan struct{})
+	go func() {
+		defer close(mergeDone)
+		for partial := range partialCh {
+			final.Merge(partial)
 		}
 	}()
 
-	var exportErr error
-	go func() {
-		defer wg.Done()
-		exportErr = p.exportStage(ctx, jobID, batchSize, session, ch.Result, ch.Progress)
-	}()
-
-	wg.Wait()
-	return exportErr
+	exportErr := p.exportStage(ctx, jobID, spec.BatchSize, session, ch.Result, ch.Progress)
+	<-mergeDone
+	return final.Finalize(), exportErr
 }
 
 func (p *Pipeline) exportStage(
@@ -168,7 +187,7 @@ func (p *Pipeline) finalizeJob(
 		p.collector.IncJobsCancelled()
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		job.Status = models.StatusFailed
-		job.Error = timeoutError(job.Config.TimeoutSeconds).Error()
+		job.Error = timeoutError(job.Spec.TimeoutSeconds).Error()
 		p.collector.IncJobsFailed()
 	case exportErr != nil:
 		job.Status = models.StatusFailed
@@ -184,6 +203,8 @@ func (p *Pipeline) finalizeJob(
 	}
 
 	job.Aggregates = aggregates
+	// Source credentials are only needed while the job runs; do not keep them at rest.
+	job.Spec = job.Spec.WithRedactedHeaders()
 
 	now := time.Now()
 	job.Metrics.EndedAt = &now

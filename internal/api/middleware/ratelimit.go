@@ -2,12 +2,15 @@ package middleware
 
 import (
 	"encoding/json"
-	"net"
 	"net/http"
-	"strings"
+	"strconv"
 	"sync"
 	"time"
 )
+
+// maxTrackedClients caps the bucket map so a flood of distinct source addresses cannot exhaust
+// memory. When the cap is hit, idle buckets are evicted; if none are idle, new clients are refused.
+const maxTrackedClients = 100_000
 
 type clientBucket struct {
 	tokens     float64
@@ -20,13 +23,16 @@ type RateLimiter struct {
 	clients map[string]*clientBucket
 	rps     float64
 	burst   int
+	ips     *IPResolver
 	stop    chan struct{}
 	done    chan struct{}
 }
 
-// NewRateLimiter initializes a RateLimiter with rps and burst limits.
-func NewRateLimiter(rps float64, burst int) *RateLimiter {
+// NewRateLimiter initializes a RateLimiter with rps and burst limits. ips resolves the client
+// address (nil = use the direct peer address only).
+func NewRateLimiter(rps float64, burst int, ips *IPResolver) *RateLimiter {
 	rl := &RateLimiter{
+		ips:     ips,
 		clients: make(map[string]*clientBucket),
 		rps:     rps,
 		burst:   burst,
@@ -38,6 +44,7 @@ func NewRateLimiter(rps float64, burst int) *RateLimiter {
 	return rl
 }
 
+// cleanupLoop periodically evicts client token buckets that have been inactive for over 10 minutes.
 func (rl *RateLimiter) cleanupLoop() {
 	defer close(rl.done)
 	ticker := time.NewTicker(5 * time.Minute)
@@ -48,13 +55,18 @@ func (rl *RateLimiter) cleanupLoop() {
 			return
 		case <-ticker.C:
 			rl.mu.Lock()
-			cutoff := time.Now().Add(-10 * time.Minute)
-			for ip, b := range rl.clients {
-				if b.lastRefill.Before(cutoff) {
-					delete(rl.clients, ip)
-				}
-			}
+			rl.evictIdleLocked(10 * time.Minute)
 			rl.mu.Unlock()
+		}
+	}
+}
+
+// evictIdleLocked removes buckets idle for longer than idle. Callers must hold rl.mu.
+func (rl *RateLimiter) evictIdleLocked(idle time.Duration) {
+	cutoff := time.Now().Add(-idle)
+	for ip, b := range rl.clients {
+		if b.lastRefill.Before(cutoff) {
+			delete(rl.clients, ip)
 		}
 	}
 }
@@ -71,6 +83,7 @@ func (rl *RateLimiter) Close() {
 	<-rl.done
 }
 
+// allow consumes a token for the given client IP, returning true if the request is permitted.
 func (rl *RateLimiter) allow(ip string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -78,6 +91,13 @@ func (rl *RateLimiter) allow(ip string) bool {
 	now := time.Now()
 	b, exists := rl.clients[ip]
 	if !exists {
+		if len(rl.clients) >= maxTrackedClients {
+			// A full bucket refills in burst/rps seconds; older buckets carry no state worth keeping.
+			rl.evictIdleLocked(time.Duration(float64(rl.burst)/rl.rps*float64(time.Second)) + time.Second)
+			if len(rl.clients) >= maxTrackedClients {
+				return false
+			}
+		}
 		rl.clients[ip] = &clientBucket{
 			tokens:     float64(rl.burst) - 1,
 			lastRefill: now,
@@ -103,8 +123,13 @@ func (rl *RateLimiter) allow(ip string) bool {
 // Middleware returns an HTTP handler middleware enforcing rate limits.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := extractIP(r)
+		ip := rl.ips.ClientIP(r)
 		if !rl.allow(ip) {
+			retry := 1
+			if rl.rps > 0 && rl.rps < 1 {
+				retry = int(1/rl.rps) + 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(retry))
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusTooManyRequests)
 			_ = json.NewEncoder(w).Encode(map[string]string{
@@ -114,16 +139,4 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func extractIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[0])
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }

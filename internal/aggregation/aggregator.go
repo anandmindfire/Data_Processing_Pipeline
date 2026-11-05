@@ -8,8 +8,12 @@ import (
 )
 
 // Aggregator defines the behavior for accumulating and finalizing aggregate metrics.
+//
+// An Aggregator is not safe for concurrent use. To aggregate in parallel, give each worker its
+// own partial aggregator (NewAggregator) and Merge the partials once the workers finish.
 type Aggregator interface {
 	Process(record models.Record)
+	Merge(other Aggregator)
 	Finalize() map[string]any
 }
 
@@ -47,6 +51,45 @@ func (a *MetricsAggregator) Process(r models.Record) {
 
 		applyOperation(a.aggregates, key, group, def.Operation, v)
 		a.counts[key+"|"+group]++
+	}
+}
+
+// Merge folds another partial aggregator built from the same definitions into a. Every supported
+// operation is associative (count/sum/avg add, min/max compare), so merging partials gives the
+// same result as aggregating sequentially.
+func (a *MetricsAggregator) Merge(other Aggregator) {
+	o, ok := other.(*MetricsAggregator)
+	if !ok || o == nil {
+		return
+	}
+	ops := make(map[string]string, len(a.definitions))
+	for _, def := range a.definitions {
+		ops[BuildAggKey(def)] = strings.ToLower(def.Operation)
+	}
+	for key, groups := range o.aggregates {
+		dst, ok := a.aggregates[key]
+		if !ok {
+			dst = make(map[string]float64, len(groups))
+			a.aggregates[key] = dst
+		}
+		for group, v := range groups {
+			cur, exists := dst[group]
+			switch ops[key] {
+			case "min":
+				if !exists || v < cur {
+					dst[group] = v
+				}
+			case "max":
+				if !exists || v > cur {
+					dst[group] = v
+				}
+			default: // count, sum, avg/average
+				dst[group] = cur + v
+			}
+		}
+	}
+	for k, n := range o.counts {
+		a.counts[k] += n
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 type PipelineResponse struct {
 	ID          string           `json:"id"`
 	Status      models.JobStatus `json:"status"`
-	Config      models.Config    `json:"config"`
+	Config      models.JobSpec   `json:"config"`
 	CreatedAt   time.Time        `json:"created_at"`
 	UpdatedAt   time.Time        `json:"updated_at"`
 	Metrics     models.Metrics   `json:"metrics"`
@@ -18,6 +18,7 @@ type PipelineResponse struct {
 	Artifacts   []string         `json:"artifacts,omitempty"`
 	Aggregates  map[string]any   `json:"aggregates,omitempty"`
 	Error       string           `json:"error,omitempty"`
+	Owner       string           `json:"owner,omitempty"` // instance that ran the job
 }
 
 // FromJob maps a domain models.Job to PipelineResponse DTO.
@@ -28,7 +29,7 @@ func FromJob(j *models.Job) PipelineResponse {
 	return PipelineResponse{
 		ID:          j.ID,
 		Status:      j.Status,
-		Config:      j.Config,
+		Config:      j.Spec.WithRedactedHeaders(),
 		CreatedAt:   j.CreatedAt,
 		UpdatedAt:   j.UpdatedAt,
 		Metrics:     j.Metrics,
@@ -36,5 +37,6 @@ func FromJob(j *models.Job) PipelineResponse {
 		Artifacts:   j.Artifacts,
 		Aggregates:  j.Aggregates,
 		Error:       j.Error,
+		Owner:       j.Owner,
 	}
 }

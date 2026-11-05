@@ -9,16 +9,6 @@
       "type": "json",
       "name": "contractors-json",
       "path": "samples/input.json"
-    },
-    {
-      "type": "http",
-      "name": "remote-advisors-api",
-      "url": "https://api.example.com/v1/advisors",
-      "format": "json",
-      "headers": {
-        "Authorization": "Bearer token123",
-        "Accept": "application/json"
-      }
     }
   ],
   "rules": [
@@ -59,6 +49,12 @@
       "field": "salary",
       "operation": "avg",
       "name": "average_compensation"
+    },
+    {
+      "group_by": "_source",
+      "field": "_source",
+      "operation": "count",
+      "name": "records_per_source"
     }
   ],
   "exports": [
@@ -74,6 +70,6 @@
   "validation_workers": 4,
   "transform_workers": 4,
   "buffer_size": 128,
-  "timeout_seconds": 60
+  "timeout_seconds": 60,
+  "include_source_field": true
 }
-

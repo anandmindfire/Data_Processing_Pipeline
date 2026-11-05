@@ -73,7 +73,7 @@ func TestValidateCanonicalizesAndReportsAllErrors(t *testing.T) {
 	_ = os.WriteFile(in, []byte("x"), 0o644)
 	v := NewRequestValidator(DefaultPolicy(exports, inputs))
 
-	cfg := &models.Config{
+	cfg := &models.JobSpec{
 		Sources: []models.Source{{Type: "CSV", Name: "a", Path: in}},
 		Exports: []models.ExportTarget{{Type: "JSON", Path: "r.json"}},
 		DLQPath: "dlq.json",
@@ -86,7 +86,7 @@ func TestValidateCanonicalizesAndReportsAllErrors(t *testing.T) {
 		t.Fatalf("expected canonicalized spec, got %+v", cfg)
 	}
 
-	bad := &models.Config{
+	bad := &models.JobSpec{
 		Sources:           []models.Source{{Type: "csv", Name: "a", Path: in}, {Type: "csv", Name: "a", Path: in}},
 		Exports:           []models.ExportTarget{{Type: "json"}},
 		ValidationWorkers: 1000,
@@ -103,7 +103,7 @@ func TestValidateRulesAndAggregations(t *testing.T) {
 
 	minVal := 10.0
 	maxVal := 5.0
-	badRules := &models.Config{
+	badRules := &models.JobSpec{
 		Sources: []models.Source{{Type: "http", Name: "s1", URL: "https://example.com/data.json"}},
 		Exports: []models.ExportTarget{{Type: "json", Path: "out.json"}},
 		Rules: []models.Rule{

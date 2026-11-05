@@ -1,6 +1,0 @@
-id,name,email,score,active
-1,Alice Johnson,alice@example.com,92.5,true
-2,Bob Smith,bob@example.com,78.0,true
-3,Charlie Brown,charlie@example.com,45.2,false
-4,Dana White,dana@example.com,88.0,true
-

@@ -157,7 +157,7 @@ func TestPipelineEndToEndWithCSVAndJSON(t *testing.T) {
 	j := &models.Job{
 		ID:     "multi-source-job",
 		Status: models.StatusPending,
-		Config: models.Config{
+		Spec: models.JobSpec{
 			Sources: []models.Source{
 				{Type: "csv", Name: "csv-source", Path: csvInput},
 				{Type: "json", Name: "json-source", Path: jsonInput},
@@ -285,7 +285,7 @@ func TestPipelineCancellation(t *testing.T) {
 	cancel()
 	j := &models.Job{
 		ID: "cancel",
-		Config: models.Config{
+		Spec: models.JobSpec{
 			Sources: []models.Source{{Type: "csv", Name: "x", Path: input}},
 			Exports: []models.ExportTarget{{Type: "json", Path: filepath.Join(dir, "out.json")}},
 		},

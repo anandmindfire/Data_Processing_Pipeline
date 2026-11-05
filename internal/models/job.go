@@ -17,7 +17,7 @@ const (
 type Job struct {
 	ID          string         `json:"id"`
 	Status      JobStatus      `json:"status"`
-	Config      Config         `json:"config"`
+	Spec        JobSpec        `json:"config"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	Metrics     Metrics        `json:"metrics"`
@@ -25,7 +25,8 @@ type Job struct {
 	Artifacts   []string       `json:"artifacts,omitempty"` // every file written for the job (exports, sidecars, DLQ)
 	Aggregates  map[string]any `json:"aggregates,omitempty"`
 	Error       string         `json:"error,omitempty"` // terminal failure or cancellation reason
-
+	// Owner is the instance (replica) executing the job; used for heartbeats and recovery.
+	Owner string `json:"owner,omitempty"`
 }
 
 // IsTerminal reports whether the status is a final state.

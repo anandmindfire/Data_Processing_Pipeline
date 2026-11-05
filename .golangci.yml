@@ -1,50 +1,63 @@
-# .golangci.yml
-# Comprehensive static analysis and linting configuration for Go.
+# golangci-lint v2 configuration. CI fails on any finding.
+version: "2"
 
 run:
   timeout: 5m
-  issues-exit-code: 1
   tests: true
   modules-download-mode: readonly
 
 linters:
-  disable-all: true
+  default: none
   enable:
-    - govet         # Compiler-level diagnostics
-    - errcheck      # Verify error return values are handled
-    - staticcheck   # Advanced static analysis & bug detection
-    - unused        # Checks for unused constants, variables, functions, and types
-    - gosimple      # Code simplification suggestions
-    - ineffassign   # Detects ineffectual assignments
-    - revive        # Fast, drop-in configurable linter for Go
-    - gocyclo       # Computes and checks function cyclomatic complexity
-    - misspell      # Finds commonly misspelled English words in comments and strings
-    - unconvert     # Removes unnecessary type conversions
-    - bodyclose     # Checks whether HTTP response bodies are successfully closed
-
-linters-settings:
-  gocyclo:
-    min-complexity: 15
-  errcheck:
-    check-type-assertions: true
-    check-blank: false
-  revive:
+    - bodyclose     # HTTP response bodies must be closed
+    - copyloopvar   # loop variable copies that are no longer needed
+    - errcheck      # unchecked errors
+    - errorlint     # errors compared/asserted without errors.Is/As
+    - gocyclo       # cyclomatic complexity
+    - gosec         # security problems (paths, permissions, crypto, SSRF, ...)
+    - govet         # compiler-level diagnostics
+    - ineffassign   # ineffectual assignments
+    - misspell      # spelling in comments and strings
+    - noctx         # HTTP requests / SQL calls without a context
+    - revive        # style and exported-API documentation
+    - rowserrcheck  # sql.Rows.Err checked
+    - sqlclosecheck # sql.Rows / Stmt closed
+    - staticcheck   # advanced static analysis
+    - unconvert     # unnecessary conversions
+    - unused        # unused code
+  settings:
+    errcheck:
+      check-type-assertions: true
+    gocyclo:
+      min-complexity: 15
+    gosec:
+      excludes:
+        - G104 # duplicate of errcheck
+    revive:
+      rules:
+        - name: exported
+        - name: blank-imports
+        - name: package-comments
+          disabled: true
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - std-error-handling
     rules:
-      - name: exported
-        disabled: false
-      - name: package-comments
-        disabled: true
-      - name: blank-imports
-        disabled: false
+      - path: _test\.go
+        linters: [errcheck, gocyclo, gosec, noctx]
 
 issues:
-  max-issues-per-linter: 50
-  max-same-issues: 5
-  exclude-dirs:
-    - vendor
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gocyclo
-        - errcheck
+  max-issues-per-linter: 0
+  max-same-issues: 0
 
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/anandmindfire/data-processing-pipeline

@@ -144,3 +144,17 @@ func TestTransformConvertsTypes(t *testing.T) {
 		t.Fatal("expected conversion error for non-boolean value")
 	}
 }
+
+func TestTransformRenameRunsAfterOtherRules(t *testing.T) {
+	rules := []models.Rule{
+		{Field: "temp_c", Type: "number", Multiply: 1.8, Add: 32, Rename: "temp_f"},
+		{Field: "city", Normalize: "upper"},
+	}
+	got, err := NewTransformer().Transform(models.Record{"temp_c": "100", "city": "pune"}, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, still := got["temp_c"]; still || got["temp_f"] != 212.0 || got["city"] != "PUNE" {
+		t.Fatalf("unexpected record after rename: %#v", got)
+	}
+}

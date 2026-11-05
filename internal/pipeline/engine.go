@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/anandmindfire/data-processing-pipeline/internal/aggregation"
 	"github.com/anandmindfire/data-processing-pipeline/internal/export"
 	"github.com/anandmindfire/data-processing-pipeline/internal/ingestion"
 	"github.com/anandmindfire/data-processing-pipeline/internal/metrics"
@@ -85,7 +84,7 @@ func NewPipeline(
 }
 
 // applyDefaults populates missing worker, batch, and timeout settings.
-func applyDefaults(cfg *models.Config) {
+func applyDefaults(cfg *models.JobSpec) {
 	if cfg.ValidationWorkers <= 0 {
 		cfg.ValidationWorkers = DefaultWorkers
 	}
@@ -97,6 +96,9 @@ func applyDefaults(cfg *models.Config) {
 	}
 	if cfg.TimeoutSeconds <= 0 {
 		cfg.TimeoutSeconds = DefaultTimeoutSeconds
+	}
+	if cfg.AggregationWorkers <= 0 {
+		cfg.AggregationWorkers = 1
 	}
 	if cfg.BatchSize <= 0 {
 		cfg.BatchSize = DefaultBatchSize
@@ -112,14 +114,15 @@ func applyDefaults(cfg *models.Config) {
 //	        ─► [aggregator] ─► result ─► [export stage: storage + sinks]
 //	every stage ─► errors ─► [error collector]      every stage ─► progress ─► [progress tracker]
 func (p *Pipeline) Execute(parent context.Context, job *models.Job, onUpdate func(*models.Job)) {
-	cfg := job.Config
+	cfg := job.Spec
 	applyDefaults(&cfg)
-	job.Config = cfg
+	job.Spec = cfg
 
 	ctx, cancel := CreateJobContext(parent, cfg.TimeoutSeconds)
 	defer cancel()
 
 	slog.Info("pipeline job started", "job_id", job.ID, "sources_count", len(cfg.Sources))
+	p.collector.IncJobsTotal()
 	now := time.Now()
 	job.Status = models.StatusRunning
 	job.Metrics.StartedAt = now
@@ -145,7 +148,7 @@ func (p *Pipeline) Execute(parent context.Context, job *models.Job, onUpdate fun
 		p.persist(&s)
 	}
 
-	channels := NewPipelineChannels(cfg.BufferSize)
+	channels := NewChannels(cfg.BufferSize)
 	progressWG := startProgressTracker(channels.Progress, job, p.collector, p.progressInterval, snapshot)
 	errWG := startErrorCollector(ctx, channels.Errors, job.ID, p.storage, channels.Progress, p.flushInterval)
 
@@ -163,9 +166,7 @@ func (p *Pipeline) Execute(parent context.Context, job *models.Job, onUpdate fun
 		close(channels.Transformed)
 	}()
 
-	agg := aggregation.NewAggregator(cfg.Aggregations)
-	exportErr := p.runAggregationAndExport(ctx, job.ID, cfg.BatchSize, agg, session, channels)
-	aggregates := agg.Finalize()
+	aggregates, exportErr := p.runAggregationAndExport(ctx, job.ID, cfg, session, channels)
 
 	// Publish exports only for runs that finished normally; cancelled or timed-out runs keep
 	// their persisted records (queryable via the API) but never publish partial files.
@@ -215,6 +216,7 @@ func (p *Pipeline) Execute(parent context.Context, job *models.Job, onUpdate fun
 	notify(onUpdate, job)
 }
 
+// notify triggers the onUpdate callback if provided by the caller.
 func notify(onUpdate func(*models.Job), job *models.Job) {
 	if onUpdate != nil {
 		onUpdate(job)

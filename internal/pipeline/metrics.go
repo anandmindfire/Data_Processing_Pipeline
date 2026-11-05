@@ -24,10 +24,12 @@ type latencyAccumulator struct {
 	n          int64
 }
 
+// newLatencyAccumulator initializes a batched latency accumulator for a specific stage.
 func newLatencyAccumulator(progressCh chan<- progressMsg, stage string) *latencyAccumulator {
 	return &latencyAccumulator{stage: stage, progressCh: progressCh}
 }
 
+// add records a duration and flushes once the batch threshold is reached.
 func (l *latencyAccumulator) add(d time.Duration) {
 	l.total += d
 	l.n++
@@ -36,6 +38,7 @@ func (l *latencyAccumulator) add(d time.Duration) {
 	}
 }
 
+// flush transmits the accumulated duration and operation count to the progress channel.
 func (l *latencyAccumulator) flush() {
 	if l.n == 0 {
 		return

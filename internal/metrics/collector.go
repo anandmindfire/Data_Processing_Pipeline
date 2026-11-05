@@ -109,6 +109,8 @@ type Snapshot struct {
 	RecordsExportedTotal  int64
 	ErrorsTotal           int64
 	StageAvgLatency       map[string]float64 // in seconds
+	StageLatencySum       map[string]float64 // total seconds per stage
+	StageLatencyCount     map[string]int64   // operations per stage
 }
 
 // GetSnapshot returns a consistent snapshot of metrics.
@@ -117,9 +119,13 @@ func (c *Collector) GetSnapshot() Snapshot {
 	defer c.mu.RUnlock()
 
 	avgLatency := make(map[string]float64, len(c.stageDurationCount))
+	sums := make(map[string]float64, len(c.stageDurationCount))
+	counts := make(map[string]int64, len(c.stageDurationCount))
 	for stage, count := range c.stageDurationCount {
+		sums[stage] = c.stageDurationSum[stage].Seconds()
+		counts[stage] = count
 		if count > 0 {
-			avgLatency[stage] = c.stageDurationSum[stage].Seconds() / float64(count)
+			avgLatency[stage] = sums[stage] / float64(count)
 		}
 	}
 
@@ -134,5 +140,7 @@ func (c *Collector) GetSnapshot() Snapshot {
 		RecordsExportedTotal:  atomic.LoadInt64(&c.recordsExportedTotal),
 		ErrorsTotal:           atomic.LoadInt64(&c.errorsTotal),
 		StageAvgLatency:       avgLatency,
+		StageLatencySum:       sums,
+		StageLatencyCount:     counts,
 	}
 }

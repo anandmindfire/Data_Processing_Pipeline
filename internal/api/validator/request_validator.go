@@ -14,27 +14,29 @@ import (
 
 // Policy holds the security boundaries and resource limits applied to every job.
 type Policy struct {
-	InputDirs  []string // directories local sources may read from
-	ExportDir  string   // every export and DLQ file must live here
-	MaxWorkers int      // per stage
-	MaxBuffer  int
-	MaxBatch   int
-	MaxTimeout int // seconds
-	MaxSources int
-	MaxExports int
+	InputDirs     []string // directories local sources may read from
+	ExportDir     string   // every export and DLQ file must live here
+	MaxWorkers    int      // per stage
+	MaxBuffer     int
+	MaxBatch      int
+	MaxTimeout    int // seconds
+	MaxSources    int
+	MaxExports    int
+	MaxAggWorkers int // parallel partial aggregators
 }
 
 // DefaultPolicy is a conservative policy used when none is supplied (mainly by tests).
 func DefaultPolicy(exportDir string, inputDirs ...string) Policy {
 	return Policy{
-		InputDirs:  inputDirs,
-		ExportDir:  exportDir,
-		MaxWorkers: 64,
-		MaxBuffer:  10000,
-		MaxBatch:   10000,
-		MaxTimeout: 3600,
-		MaxSources: 16,
-		MaxExports: 8,
+		InputDirs:     inputDirs,
+		ExportDir:     exportDir,
+		MaxWorkers:    64,
+		MaxBuffer:     10000,
+		MaxBatch:      10000,
+		MaxTimeout:    3600,
+		MaxSources:    16,
+		MaxExports:    8,
+		MaxAggWorkers: 16,
 	}
 }
 
@@ -58,7 +60,7 @@ func NewRequestValidator(policy Policy) *RequestValidator {
 
 // Validate checks cfg and canonicalizes its file paths in place (sources, exports, DLQ) so the
 // pipeline only ever touches the resolved, sandboxed locations. All problems are reported together.
-func (v *RequestValidator) Validate(cfg *models.Config) error {
+func (v *RequestValidator) Validate(cfg *models.JobSpec) error {
 	if cfg == nil {
 		return errors.New("request configuration is required")
 	}
@@ -71,7 +73,8 @@ func (v *RequestValidator) Validate(cfg *models.Config) error {
 	return errors.Join(errs...)
 }
 
-func (v *RequestValidator) validateLimits(cfg *models.Config) []error {
+// validateLimits verifies pipeline concurrency and buffer settings against policy boundaries.
+func (v *RequestValidator) validateLimits(cfg *models.JobSpec) []error {
 	p := v.policy
 	var errs []error
 	check := func(name string, val, maxVal int) {
@@ -87,6 +90,7 @@ func (v *RequestValidator) validateLimits(cfg *models.Config) []error {
 	check("batch_size", cfg.BatchSize, p.MaxBatch)
 	check("timeout_seconds", cfg.TimeoutSeconds, p.MaxTimeout)
 	check("max_records", cfg.MaxRecords, 0)
+	check("aggregation_workers", cfg.AggregationWorkers, p.MaxAggWorkers)
 	if p.MaxSources > 0 && len(cfg.Sources) > p.MaxSources {
 		errs = append(errs, fmt.Errorf("at most %d sources are allowed (got %d)", p.MaxSources, len(cfg.Sources)))
 	}
@@ -96,6 +100,7 @@ func (v *RequestValidator) validateLimits(cfg *models.Config) []error {
 	return errs
 }
 
+// validateSources validates data source types, names, formats, and canonical paths or URLs.
 func (v *RequestValidator) validateSources(sources []models.Source) []error {
 	if len(sources) == 0 {
 		return []error{errors.New("at least one source is required")}
@@ -115,39 +120,55 @@ func (v *RequestValidator) validateSources(sources []models.Source) []error {
 		}
 		names[s.Name] = true
 
-		if !sourceTypes[s.Type] {
-			errs = append(errs, fmt.Errorf("%s: type must be one of csv, json, http, api (got %q)", prefix, s.Type))
-		}
-		if !sourceFormats[s.Format] {
-			errs = append(errs, fmt.Errorf("%s: format must be csv, json or ndjson (got %q)", prefix, s.Format))
-		}
-
-		switch {
-		case s.Path == "" && s.URL == "":
-			errs = append(errs, fmt.Errorf("%s: either path or url is required", prefix))
-		case s.Path != "" && s.URL != "":
-			errs = append(errs, fmt.Errorf("%s: path and url are mutually exclusive", prefix))
-		case s.URL != "":
-			if !strings.HasPrefix(strings.ToLower(s.URL), "http://") && !strings.HasPrefix(strings.ToLower(s.URL), "https://") {
-				errs = append(errs, fmt.Errorf("%s: url must use http or https", prefix))
-			}
-		default:
-			if s.Type == "http" || s.Type == "api" {
-				errs = append(errs, fmt.Errorf("%s: %s sources require a url", prefix, s.Type))
-				continue
-			}
-			resolved, err := resolveInput(s.Path, v.policy.InputDirs)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("%s: %w", prefix, err))
-				continue
-			}
-			s.Path = resolved
+		errs = append(errs, validateSourceKind(prefix, s)...)
+		if err := v.validateSourceLocation(prefix, s); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errs
 }
 
-func (v *RequestValidator) validateExports(cfg *models.Config) []error {
+// validateSourceKind checks the type/format/records_path combination.
+func validateSourceKind(prefix string, s *models.Source) []error {
+	var errs []error
+	if !sourceTypes[s.Type] {
+		errs = append(errs, fmt.Errorf("%s: type must be one of csv, json, http, api (got %q)", prefix, s.Type))
+	}
+	if !sourceFormats[s.Format] {
+		errs = append(errs, fmt.Errorf("%s: format must be csv, json or ndjson (got %q)", prefix, s.Format))
+	}
+	if s.RecordsPath != "" && (s.Format == "csv" || (s.Format == "" && s.Type == "csv")) {
+		errs = append(errs, fmt.Errorf("%s: records_path only applies to JSON sources", prefix))
+	}
+	return errs
+}
+
+// validateSourceLocation checks path/url and canonicalizes local paths inside the input sandbox.
+func (v *RequestValidator) validateSourceLocation(prefix string, s *models.Source) error {
+	switch {
+	case s.Path == "" && s.URL == "":
+		return fmt.Errorf("%s: either path or url is required", prefix)
+	case s.Path != "" && s.URL != "":
+		return fmt.Errorf("%s: path and url are mutually exclusive", prefix)
+	case s.URL != "":
+		lower := strings.ToLower(s.URL)
+		if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+			return fmt.Errorf("%s: url must use http or https", prefix)
+		}
+		return nil
+	case s.Type == "http" || s.Type == "api":
+		return fmt.Errorf("%s: %s sources require a url", prefix, s.Type)
+	}
+	resolved, err := resolveInput(s.Path, v.policy.InputDirs)
+	if err != nil {
+		return fmt.Errorf("%s: %w", prefix, err)
+	}
+	s.Path = resolved
+	return nil
+}
+
+// validateExports checks export destinations, supported types, DLQ uniqueness, and sandboxed paths.
+func (v *RequestValidator) validateExports(cfg *models.JobSpec) []error {
 	if len(cfg.Exports) == 0 {
 		return []error{errors.New("at least one export destination is required")}
 	}
@@ -188,6 +209,7 @@ func (v *RequestValidator) validateExports(cfg *models.Config) []error {
 	return errs
 }
 
+// validateRules ensures fields, data types, normalizations, and regex patterns in rules are valid.
 func validateRules(rules []models.Rule) []error {
 	var errs []error
 	for i, r := range rules {
@@ -204,6 +226,9 @@ func validateRules(rules []models.Rule) []error {
 		if r.Min != nil && r.Max != nil && *r.Min > *r.Max {
 			errs = append(errs, fmt.Errorf("%s: min cannot be greater than max", prefix))
 		}
+		if r.Rename != "" && strings.TrimSpace(r.Rename) == "" {
+			errs = append(errs, fmt.Errorf("%s: rename must not be blank", prefix))
+		}
 		if r.Pattern != "" {
 			if _, err := regexp.Compile(r.Pattern); err != nil {
 				errs = append(errs, fmt.Errorf("%s: invalid pattern: %w", prefix, err))
@@ -213,6 +238,7 @@ func validateRules(rules []models.Rule) []error {
 	return errs
 }
 
+// validateAggregations validates aggregation fields and supported reduction operations.
 func validateAggregations(aggs []models.Aggregation) []error {
 	var errs []error
 	for i, a := range aggs {
@@ -228,6 +254,7 @@ func validateAggregations(aggs []models.Aggregation) []error {
 	return errs
 }
 
+// set converts a list of strings into a lookup set map.
 func set(vals ...string) map[string]bool {
 	m := make(map[string]bool, len(vals))
 	for _, v := range vals {

@@ -83,6 +83,34 @@ func ApplyEnvironmentOverrides(cfg *Config) {
 	cfg.MaxJobTimeoutSeconds = GetEnvInt("MAX_JOB_TIMEOUT_SECONDS", cfg.MaxJobTimeoutSeconds)
 	cfg.MaxSourcesPerJob = GetEnvInt("MAX_SOURCES_PER_JOB", cfg.MaxSourcesPerJob)
 	cfg.MaxExportsPerJob = GetEnvInt("MAX_EXPORTS_PER_JOB", cfg.MaxExportsPerJob)
+	cfg.MaxSourceBytes = GetEnvInt64("MAX_SOURCE_BYTES", cfg.MaxSourceBytes)
+	cfg.MaxAggregationWorkers = GetEnvInt("MAX_AGGREGATION_WORKERS", cfg.MaxAggregationWorkers)
+
+	cfg.RequestTimeout = GetEnvDuration("REQUEST_TIMEOUT", cfg.RequestTimeout)
+	cfg.TrustedProxies = GetEnvList("TRUSTED_PROXIES", cfg.TrustedProxies)
+	cfg.CORSAllowedOrigins = GetEnvList("CORS_ALLOWED_ORIGINS", cfg.CORSAllowedOrigins)
+	cfg.MetricsPublic = GetEnvBool("METRICS_PUBLIC", cfg.MetricsPublic)
+	cfg.DocsEnabled = GetEnvBool("DOCS_ENABLED", cfg.DocsEnabled)
+	cfg.JobRetention = GetEnvDurationAllowZero("JOB_RETENTION", cfg.JobRetention)
+
+	cfg.DatabaseURL = GetEnv("DATABASE_URL", cfg.DatabaseURL)
+	cfg.DBMaxOpenConns = GetEnvInt("DB_MAX_OPEN_CONNS", cfg.DBMaxOpenConns)
+	cfg.DBMaxIdleConns = GetEnvInt("DB_MAX_IDLE_CONNS", cfg.DBMaxIdleConns)
+	cfg.DBConnLifetime = GetEnvDuration("DB_CONN_MAX_LIFETIME", cfg.DBConnLifetime)
+	cfg.InstanceID = GetEnv("INSTANCE_ID", cfg.InstanceID)
+	cfg.JobLease = GetEnvDuration("JOB_LEASE", cfg.JobLease)
+	cfg.APIKeyDefaultTTL = GetEnvDuration("API_KEY_DEFAULT_TTL", cfg.APIKeyDefaultTTL)
+	cfg.APIKeyMaxTTL = GetEnvDuration("API_KEY_MAX_TTL", cfg.APIKeyMaxTTL)
+	cfg.MaxAPIKeys = GetEnvInt("MAX_API_KEYS", cfg.MaxAPIKeys)
+}
+
+// GetEnvDurationAllowZero is GetEnvDuration but accepts "0" (e.g. to disable a feature).
+func GetEnvDurationAllowZero(key string, defaultVal time.Duration) time.Duration {
+	val := strings.TrimSpace(os.Getenv(key))
+	if val == "0" {
+		return 0
+	}
+	return GetEnvDuration(key, defaultVal)
 }
 
 // GetEnvDuration retrieves a Go duration (e.g. "30s") with fallback default.
@@ -121,6 +149,7 @@ func GetEnvList(key string, defaultVal []string) []string {
 	return out
 }
 
+// syncServerAddress synchronizes ServerPort and ServerAddr so host-port binds remain consistent.
 func syncServerAddress(cfg *Config) {
 	addrEnv := GetEnvFirst([]string{"ADDR", "SERVER_ADDR"}, "")
 	portEnv := GetEnvFirst([]string{"PORT", "SERVER_PORT"}, "")

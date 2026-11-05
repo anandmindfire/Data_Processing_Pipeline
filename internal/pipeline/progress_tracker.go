@@ -91,6 +91,7 @@ func metricsSnapshot(m models.Metrics, now time.Time) models.Metrics {
 	return m
 }
 
+// applyProgressMsg mutates the job metrics and reports updates to the Prometheus collector.
 func applyProgressMsg(job *models.Job, collector *metrics.Collector, msg progressMsg) {
 	switch msg.kind {
 	case progressDiscovered:

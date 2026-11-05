@@ -33,5 +33,20 @@ func DefaultConfig() *Config {
 		MaxJobTimeoutSeconds:  3600,
 		MaxSourcesPerJob:      16,
 		MaxExportsPerJob:      8,
+		MaxSourceBytes:        1 << 30, // 1 GiB
+		MaxAggregationWorkers: 16,
+		RequestTimeout:        30 * time.Second,
+		TrustedProxies:        nil,
+		CORSAllowedOrigins:    nil,
+		MetricsPublic:         false,
+		DocsEnabled:           true,
+		JobRetention:          7 * 24 * time.Hour,
+		DBMaxOpenConns:        20,
+		DBMaxIdleConns:        10,
+		DBConnLifetime:        30 * time.Minute,
+		JobLease:              30 * time.Second,
+		APIKeyDefaultTTL:      30 * 24 * time.Hour,
+		APIKeyMaxTTL:          365 * 24 * time.Hour,
+		MaxAPIKeys:            100,
 	}
 }

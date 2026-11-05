@@ -36,3 +36,19 @@ func TestMetricsCollectorAndPrometheus(t *testing.T) {
 		t.Fatalf("missing processed metric: %s", prom)
 	}
 }
+
+func TestPrometheusStageSummaryFormat(t *testing.T) {
+	c := NewCollector()
+	c.ObserveStageLatencyBatch("validation", 3*time.Second, 6)
+	out := c.FormatPrometheus()
+	for _, want := range []string{
+		"# TYPE pipeline_stage_duration_seconds summary",
+		`pipeline_stage_duration_seconds_sum{stage="validation"} 3`,
+		`pipeline_stage_duration_seconds_count{stage="validation"} 6`,
+		"# TYPE pipeline_build_info gauge",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+}
