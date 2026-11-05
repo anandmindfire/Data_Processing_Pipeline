@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -305,5 +306,26 @@ func TestSQLiteRepository(t *testing.T) {
 	recs, n, _ := repo2.GetRecords(ctx, "durable", 0, 0)
 	if n != 1 || recs[0]["k"] != "v" {
 		t.Fatalf("expected persisted record after restart, got %+v", recs)
+	}
+}
+
+func TestBindPlaceholders(t *testing.T) {
+	pg := &SQLRepository{d: postgresDialect}
+	var many strings.Builder
+	for i := 0; i < 12; i++ {
+		many.WriteString("?,")
+	}
+	cases := map[string]string{
+		"SELECT 1":                          "SELECT 1",
+		"WHERE id = ? AND status IN (?, ?)": "WHERE id = $1 AND status IN ($2, $3)",
+		many.String():                       "$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,",
+	}
+	for in, want := range cases {
+		if got := pg.bind(in); got != want {
+			t.Errorf("bind(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if sqlite := (&SQLRepository{d: sqliteDialect}); sqlite.bind("a = ?") != "a = ?" {
+		t.Error("SQLite placeholders must be left unchanged")
 	}
 }

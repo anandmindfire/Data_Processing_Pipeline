@@ -50,11 +50,14 @@ func (r *SQLRepository) bind(q string) string {
 		return q
 	}
 	var sb strings.Builder
+	sb.Grow(len(q) + 8) // "$n" is at most a few bytes longer than "?" per placeholder
+	var num [20]byte    // scratch space for formatting n without allocating
 	n := 0
 	for _, c := range q {
 		if c == '?' {
 			n++
-			sb.WriteString("$" + strconv.Itoa(n))
+			sb.WriteByte('$')
+			sb.Write(strconv.AppendInt(num[:0], int64(n), 10))
 			continue
 		}
 		sb.WriteRune(c)
