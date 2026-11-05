@@ -97,7 +97,7 @@ func (e *FileExporter) Open(jobID string, targets []models.ExportTarget) (Sessio
 		if path == "" {
 			path = DefaultPath(e.defaultDir, jobID, target.Type)
 		}
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 			s.Abort()
 			return nil, fmt.Errorf("%w: create export directory: %w", ErrExportFailed, err)
 		}

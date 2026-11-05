@@ -5,8 +5,8 @@ import (
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
-// PipelineChannels aggregates the multi-stage channel topology for a running pipeline.
-type PipelineChannels struct {
+// Channels aggregates the multi-stage channel topology for a running pipeline.
+type Channels struct {
 	Raw         chan ingestion.Item
 	Valid       chan ingestion.Item
 	Transformed chan transformResult
@@ -15,12 +15,12 @@ type PipelineChannels struct {
 	Progress    chan progressMsg
 }
 
-// NewPipelineChannels allocates all channel buffers according to the configured bufferSize.
-func NewPipelineChannels(bufferSize int) *PipelineChannels {
+// NewChannels allocates all channel buffers according to the configured bufferSize.
+func NewChannels(bufferSize int) *Channels {
 	if bufferSize <= 0 {
 		bufferSize = 64
 	}
-	return &PipelineChannels{
+	return &Channels{
 		Raw:         make(chan ingestion.Item, bufferSize),
 		Valid:       make(chan ingestion.Item, bufferSize),
 		Transformed: make(chan transformResult, bufferSize),

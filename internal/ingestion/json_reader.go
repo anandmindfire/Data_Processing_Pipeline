@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
@@ -14,7 +15,7 @@ import (
 func readJSON(ctx context.Context, r io.Reader, max int, emit func(int, models.Record) error) error {
 	br := bufio.NewReader(r)
 	firstByte, err := peekFirstNonWhitespace(br)
-	if err == io.EOF {
+	if errors.Is(err, io.EOF) {
 		return nil
 	}
 	if err != nil {
@@ -28,6 +29,7 @@ func readJSON(ctx context.Context, r io.Reader, max int, emit func(int, models.R
 	return streamJSONObjects(ctx, dec, max, emit)
 }
 
+// streamJSONArray decodes a top-level JSON array one object at a time.
 func streamJSONArray(ctx context.Context, dec *json.Decoder, max int, emit func(int, models.Record) error) error {
 	// Consume opening '['
 	_, err := dec.Token()
@@ -62,6 +64,7 @@ func streamJSONArray(ctx context.Context, dec *json.Decoder, max int, emit func(
 	return nil
 }
 
+// streamJSONObjects decodes concatenated JSON objects or NDJSON streams.
 func streamJSONObjects(ctx context.Context, dec *json.Decoder, max int, emit func(int, models.Record) error) error {
 	idx := 0
 	for {
@@ -77,7 +80,7 @@ func streamJSONObjects(ctx context.Context, dec *json.Decoder, max int, emit fun
 
 		var rec map[string]any
 		if err := dec.Decode(&rec); err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return fmt.Errorf("%w: decode object %d: %w", ErrInvalidFormat, idx+1, err)
@@ -90,6 +93,7 @@ func streamJSONObjects(ctx context.Context, dec *json.Decoder, max int, emit fun
 	return nil
 }
 
+// peekFirstNonWhitespace advances past leading whitespace and returns the first token byte.
 func peekFirstNonWhitespace(br *bufio.Reader) (byte, error) {
 	for {
 		b, err := br.ReadByte()

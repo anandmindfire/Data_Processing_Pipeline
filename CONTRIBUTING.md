@@ -27,37 +27,38 @@ We are committed to providing a welcoming, inclusive, and harassment-free enviro
 The project is structured as a **modular monolith** adhering to Clean Architecture principles:
 
 ```text
-├── cmd/
-│   └── server/                     # Application entry point (main.go & CLI probes)
-├── configs/                        # 12-factor configuration & environment loaders
-├── internal/
-│   ├── api/                        # HTTP transport layer (controllers, routes, middleware, dto, validator)
-│   ├── bootstrap/                  # Dependency injection and application lifecycle orchestrator
-│   ├── pipeline/                   # Core pipeline engine, channels, coordinator, workers, error collector
-│   ├── ingestion/                  # CSV, JSON, and SSRF-protected HTTP stream readers
-│   ├── validation/                 # Schema bounds checking and business validation
-│   ├── transformation/             # Normalization, type mapping, and enrichment
-│   ├── aggregation/                # In-memory metrics & group-by aggregation engine
-│   ├── export/                     # Multi-target export engine (CSV, JSON, SQLite, DLQ)
-│   ├── storage/                    # Durable persistence (in-memory, file-based, SQLite)
-│   ├── repositories/               # Repository interfaces and SQLite implementations
-│   └── models/                     # Canonical domain models (Job, Record, Config, Rule)
-├── pkg/                            # Reusable shared utilities (logger, response, errors, constants)
-├── test/
-│   ├── integration/                # End-to-end integration and API lifecycle tests
-│   ├── unit/                       # Component-level unit test suites
-│   ├── mocks/                      # Mock transports and readers
-│   └── testdata/                   # Fixture CSV and JSON files
-├── scripts/                        # Load testing, benchmark, and runner scripts
-└── .github/                        # CI workflows, PR templates, and issue templates
+├── api/                            # OpenAPI spec (public contract), embedded into the server
+├── cmd/server/                     # Entry point (flags, signals, --healthcheck, --version)
+├── internal/                       # All application code; not importable by other modules
+│   ├── bootstrap/                  # Composition root: wires config, store, pipeline, services, router
+│   ├── config/                     # Defaults, JSON file, .env and environment overrides, validation
+│   ├── buildinfo/                  # Version metadata injected with -ldflags
+│   ├── api/                        # HTTP layer: handlers, middleware, routes, validator, dto, respond
+│   ├── services/                   # Use cases: job lifecycle, progress, results, retention
+│   ├── pipeline/                   # Engine: channels, worker pools, aggregation, export stage
+│   ├── ingestion/                  # CSV/JSON/HTTP readers, SSRF-safe client, size limits
+│   ├── validation/ transformation/ aggregation/ export/
+│   ├── storage/                    # Repository contract; SQLite and in-memory implementations
+│   ├── metrics/                    # Prometheus collector
+│   └── models/                     # Domain types (JobSpec, Job, Record, Metrics, RecordError)
+├── test/integration/               # Cross-package end-to-end tests
+├── samples/                        # Sample inputs, job specs, recorded responses
+├── scripts/                        # smoke_test.sh, load_test.sh, run_pipeline.sh
+└── .github/                        # CI, Dependabot, issue and PR templates
 ```
+
+Conventions: unit tests live next to the code (`foo_test.go`); new packages go under `internal/`
+(there is deliberately no `pkg/`, since nothing here is meant to be imported by other modules);
+dependencies point inward (`handlers → services → pipeline → stages → models`), and only
+`internal/bootstrap` constructs concrete implementations.
 
 ---
 
 ## Prerequisites & Local Setup
 
 ### Prerequisites
-- **Go:** `1.23+` (recommended: Go 1.23 or latest stable)
+- **Go:** `1.26` (the patched toolchain pinned in `go.mod` is downloaded automatically)
+- **Tools:** `make tools` installs golangci-lint v2 and govulncheck
 - **Make:** GNU Make
 - **Docker:** Docker 24+ & Docker Compose v2 (optional for containerized deployments)
 
@@ -112,7 +113,7 @@ We follow the [Conventional Commits](https://www.conventionalcommits.org/) speci
 All submitted code must satisfy these rigorous standards:
 
 1. **Idiomatic Go & Formatting:**
-   - Always run `make fmt` (`gofmt -s -w .`) before committing.
+   - Always run `make fmt` (gofmt + goimports) and `make lint` before committing; CI fails on any lint finding.
    - Code must pass `go vet ./...` without any warnings.
    - All exported types, functions, and methods must have clean, complete docstrings.
 
@@ -174,7 +175,9 @@ make load-test
 3. **Fill Out the PR Template:** Complete all sections of the [Pull Request Template](.github/pull_request_template.md).
 4. **CI Verification:** Ensure all automated GitHub Actions checks pass:
    - Code Formatting (`gofmt`)
-   - Static Analysis (`go vet` & `golangci-lint`)
+   - Static Analysis (`golangci-lint` incl. gosec) and `govulncheck`
+   - Race tests with a 75% coverage gate
+   - Container build, smoke test and Trivy scan
    - Race Condition Test Suite (`go test -race`)
    - Docker Container Image Build
 

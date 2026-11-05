@@ -1,9 +1,11 @@
 package pipeline
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -77,66 +79,66 @@ func exportDeadLetterRecords(ctx context.Context, path string, jobID string, sto
 	if path == "" {
 		return false, nil
 	}
-	const pageSize = 1000
-	first, total, err := store.GetErrors(ctx, jobID, 0, pageSize)
-	if err != nil {
+	if _, total, err := store.GetErrors(ctx, jobID, 0, 1); err != nil || total == 0 {
 		return false, err
 	}
-	if total == 0 {
-		return false, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return false, err
 	}
 	tmp := path + ".part"
-	f, err := os.Create(tmp)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640) //nolint:gosec // path was sandboxed to EXPORT_DIR at submission
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = os.Remove(tmp) }() // no-op after a successful rename
 
-	write := func(s string) error { _, err := f.WriteString(s); return err }
-	if err := write("["); err != nil {
-		_ = f.Close()
-		return false, err
+	n, writeErr := writeErrorsJSON(ctx, f, jobID, store)
+	if closeErr := f.Close(); writeErr == nil {
+		writeErr = closeErr
 	}
-	n := 0
-	for offset, page := 0, first; len(page) > 0; {
-		for _, e := range page {
-			b, err := json.Marshal(e)
-			if err != nil {
-				_ = f.Close()
-				return false, err
-			}
-			sep := ",\n  "
-			if n == 0 {
-				sep = "\n  "
-			}
-			if err := write(sep + string(b)); err != nil {
-				_ = f.Close()
-				return false, err
-			}
-			n++
-		}
-		offset += len(page)
-		if offset >= total {
-			break
-		}
-		if page, _, err = store.GetErrors(ctx, jobID, offset, pageSize); err != nil {
-			_ = f.Close()
-			return false, err
-		}
-	}
-	if err := write("\n]\n"); err != nil {
-		_ = f.Close()
-		return false, err
-	}
-	if err := f.Close(); err != nil {
-		return false, err
+	if writeErr != nil {
+		return false, writeErr
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		return false, fmt.Errorf("publish dead-letter file: %w", err)
 	}
 	slog.Info("dead-letter records exported", "job_id", jobID, "count", n, "path", path)
 	return true, nil
+}
+
+// writeErrorsJSON streams every stored error of a job as a JSON array, one page at a time.
+func writeErrorsJSON(ctx context.Context, w io.Writer, jobID string, store storage.Repository) (int, error) {
+	const pageSize = 1000
+	bw := bufio.NewWriter(w)
+	if _, err := bw.WriteString("["); err != nil {
+		return 0, err
+	}
+	n := 0
+	for offset := 0; ; offset += pageSize {
+		page, total, err := store.GetErrors(ctx, jobID, offset, pageSize)
+		if err != nil {
+			return n, err
+		}
+		for _, e := range page {
+			b, err := json.Marshal(e)
+			if err != nil {
+				return n, err
+			}
+			sep := ",\n  "
+			if n == 0 {
+				sep = "\n  "
+			}
+			if _, err := bw.WriteString(sep + string(b)); err != nil {
+				return n, err
+			}
+			n++
+		}
+		if len(page) == 0 || offset+len(page) >= total {
+			break
+		}
+	}
+	if _, err := bw.WriteString("\n]\n"); err != nil {
+		return n, err
+	}
+	return n, bw.Flush()
 }

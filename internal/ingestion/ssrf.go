@@ -38,6 +38,7 @@ func mustParseCIDRs(cidrs ...string) []*net.IPNet {
 // ErrSSRFBlocked is returned when an HTTP source URL targets a restricted or private destination.
 var ErrSSRFBlocked = errors.New("SSRF protection: destination address is restricted or private")
 
+// isRestrictedIP returns true if the IP belongs to loopback, private, link-local, or cloud metadata ranges.
 func isRestrictedIP(ip net.IP) bool {
 	if ip == nil {
 		return true
@@ -58,6 +59,7 @@ func isRestrictedIP(ip net.IP) bool {
 	return false
 }
 
+// validateURLStructure checks that the URL uses HTTP/HTTPS scheme and contains no embedded credentials.
 func validateURLStructure(u *url.URL) error {
 	scheme := strings.ToLower(u.Scheme)
 	if scheme != "http" && scheme != "https" {
@@ -69,6 +71,7 @@ func validateURLStructure(u *url.URL) error {
 	return nil
 }
 
+// validateDestinationHost ensures hostnames and resolved IPs do not resolve to prohibited destinations.
 func validateDestinationHost(host string) error {
 	if host == "" || strings.EqualFold(host, "localhost") {
 		return fmt.Errorf("%w: localhost is prohibited", ErrSSRFBlocked)
@@ -81,9 +84,11 @@ func validateDestinationHost(host string) error {
 		return nil
 	}
 
-	if ips, err := net.LookupIP(host); err == nil {
-		for _, ip := range ips {
-			if isRestrictedIP(ip) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host); err == nil {
+		for _, a := range addrs {
+			if ip := a.IP; isRestrictedIP(ip) {
 				return fmt.Errorf("%w: resolved IP %s is restricted", ErrSSRFBlocked, ip.String())
 			}
 		}

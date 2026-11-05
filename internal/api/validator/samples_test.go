@@ -24,7 +24,7 @@ func TestSampleJobSpecsAreValid(t *testing.T) {
 	defer func() { _ = os.Chdir(wd) }()
 
 	v := validator.NewRequestValidator(validator.DefaultPolicy("exports", "samples"))
-	for _, name := range []string{"samples/job.json", "samples/mixed_job.json"} {
+	for _, name := range []string{"samples/job.json", "samples/mixed_job.json", "samples/global_daily_report.json"} {
 		b, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
@@ -33,7 +33,7 @@ func TestSampleJobSpecsAreValid(t *testing.T) {
 		if err := json.Unmarshal(b, &req); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		cfg := req.ToConfig()
+		cfg := req.ToSpec()
 		if err := v.Validate(&cfg); err != nil {
 			t.Fatalf("%s is rejected by the validator: %v", name, err)
 		}

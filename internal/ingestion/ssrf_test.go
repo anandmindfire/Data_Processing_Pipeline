@@ -55,12 +55,15 @@ func TestSafeHTTPClientBlocksPrivateDestinationsAtDialTime(t *testing.T) {
 
 	// The URL pre-check is bypassed on purpose: the dialer itself must refuse loopback, which is
 	// what protects against DNS names that resolve (or re-resolve) to private addresses.
-	_, err := NewSafeHTTPClient(2*time.Second, false).Get(srv.URL)
+	resp, err := NewSafeHTTPClient(2*time.Second, false).Get(srv.URL)
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
 	if err == nil || !errors.Is(err, ErrSSRFBlocked) {
 		t.Fatalf("expected dial-time SSRF block, got %v", err)
 	}
 
-	resp, err := NewSafeHTTPClient(2*time.Second, true).Get(srv.URL)
+	resp, err = NewSafeHTTPClient(2*time.Second, true).Get(srv.URL)
 	if err != nil {
 		if strings.Contains(err.Error(), "operation not permitted") {
 			t.Skipf("skipping live dial test in restricted sandbox: %v", err)

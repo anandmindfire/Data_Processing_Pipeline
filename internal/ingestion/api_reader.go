@@ -16,6 +16,7 @@ const (
 	initialRetryWait = 50 * time.Millisecond
 )
 
+// executeSingleHTTPRequest performs a single HTTP GET request and reports if failures are retryable.
 func executeSingleHTTPRequest(ctx context.Context, src models.Source, client *http.Client) (io.ReadCloser, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.URL, nil)
 	if err != nil {

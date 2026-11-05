@@ -10,8 +10,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/anandmindfire/data-processing-pipeline/internal/models"
+	// Registers the pure-Go (CGO-free) "sqlite" database/sql driver.
 	_ "modernc.org/sqlite"
+
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 // sqliteSink writes records into a real SQLite database file through database/sql.
@@ -25,6 +27,7 @@ type sqliteSink struct {
 	columns map[string]struct{}
 }
 
+// newSQLiteSink initializes a temporary SQLite database with a base records table.
 func newSQLiteSink(path string) (*sqliteSink, error) {
 	tmp := partPath(path)
 	_ = os.Remove(tmp)
@@ -35,7 +38,7 @@ func newSQLiteSink(path string) (*sqliteSink, error) {
 		return nil, fmt.Errorf("%w: open sqlite export %q: %w", ErrExportFailed, path, err)
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(`CREATE TABLE records (_row_id INTEGER PRIMARY KEY AUTOINCREMENT)`); err != nil {
+	if _, err := db.ExecContext(context.Background(), `CREATE TABLE records (_row_id INTEGER PRIMARY KEY AUTOINCREMENT)`); err != nil {
 		_ = db.Close()
 		_ = os.Remove(tmp)
 		return nil, fmt.Errorf("%w: create records table: %w", ErrExportFailed, err)
@@ -43,6 +46,7 @@ func newSQLiteSink(path string) (*sqliteSink, error) {
 	return &sqliteSink{path: path, db: db, columns: make(map[string]struct{})}, nil
 }
 
+// write alters schema for new columns dynamically and inserts records in a transaction.
 func (s *sqliteSink) write(records []models.Record) error {
 	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -80,7 +84,8 @@ func (s *sqliteSink) write(records []models.Record) error {
 			for i, k := range keys {
 				cols[i] = quoteIdent(k)
 			}
-			q := fmt.Sprintf("INSERT INTO records (%s) VALUES (%s)", strings.Join(cols, ", "),
+			// Identifiers are quoted with quoteIdent and values are bound as parameters.
+			q := fmt.Sprintf("INSERT INTO records (%s) VALUES (%s)", strings.Join(cols, ", "), //nolint:gosec // see above
 				strings.TrimSuffix(strings.Repeat("?, ", len(keys)), ", "))
 			if stmt, err = tx.PrepareContext(ctx, q); err != nil {
 				return err
@@ -98,8 +103,9 @@ func (s *sqliteSink) write(records []models.Record) error {
 	return tx.Commit()
 }
 
+// finish creates the aggregations table, inserts aggregates, closes db, and publishes the file.
 func (s *sqliteSink) finish(aggregates map[string]any) error {
-	if _, err := s.db.Exec(`CREATE TABLE aggregations (name TEXT PRIMARY KEY, result TEXT NOT NULL)`); err != nil {
+	if _, err := s.db.ExecContext(context.Background(), `CREATE TABLE aggregations (name TEXT PRIMARY KEY, result TEXT NOT NULL)`); err != nil {
 		return err
 	}
 	for _, name := range sortedKeys(aggregates) {
@@ -107,7 +113,7 @@ func (s *sqliteSink) finish(aggregates map[string]any) error {
 		if err != nil {
 			return err
 		}
-		if _, err := s.db.Exec(`INSERT INTO aggregations (name, result) VALUES (?, ?)`, name, string(b)); err != nil {
+		if _, err := s.db.ExecContext(context.Background(), `INSERT INTO aggregations (name, result) VALUES (?, ?)`, name, string(b)); err != nil {
 			return err
 		}
 	}
@@ -117,16 +123,19 @@ func (s *sqliteSink) finish(aggregates map[string]any) error {
 	return os.Rename(partPath(s.path), s.path)
 }
 
+// abort closes the database and removes the uncommitted temporary database file.
 func (s *sqliteSink) abort() {
 	_ = s.db.Close()
 	_ = os.Remove(partPath(s.path))
 }
 
+// artifacts returns the finalized SQLite database file path.
 func (s *sqliteSink) artifacts() []string { return []string{s.path} }
 
 // ---------------------------------------------------------------------------------------------
 // Value helpers shared by sinks.
 
+// isNumeric reports whether the value is an integer, float, or numeric JSON number.
 func isNumeric(v any) bool {
 	switch x := v.(type) {
 	case float64, float32, int, int32, int64, uint, uint32, uint64:

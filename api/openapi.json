@@ -1,0 +1,1708 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Data Processing Pipeline REST API",
+    "version": "1.0.0",
+    "description": "High-performance, asynchronous concurrent data processing engine in idiomatic Go. Ingests heterogeneous data (CSV, JSON, HTTP REST APIs), validates and transforms records, calculates statistical group aggregations, and persists results with real-time observability.",
+    "contact": {
+      "name": "Anand K",
+      "email": "anand.k@mindfiresolutions.com"
+    },
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "Local Development Server"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Pipelines",
+      "description": "Pipeline job lifecycle management, progress tracking, and results retrieval"
+    },
+    {
+      "name": "Observability",
+      "description": "System health checks and Prometheus metrics exposition"
+    },
+    {
+      "name": "API Keys",
+      "description": "Issue, list and revoke expiring API keys (admin only)"
+    }
+  ],
+  "paths": {
+    "/api/v1/pipelines": {
+      "post": {
+        "tags": [
+          "Pipelines"
+        ],
+        "summary": "Submit and trigger a pipeline job",
+        "description": "Submits a new data processing pipeline specification and begins asynchronous execution.",
+        "operationId": "createPipelineJob",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Config"
+              },
+              "example": {
+                "sources": [
+                  {
+                    "type": "csv",
+                    "name": "employees-csv",
+                    "path": "samples/input.csv"
+                  },
+                  {
+                    "type": "json",
+                    "name": "contractors-json",
+                    "path": "samples/input.json"
+                  }
+                ],
+                "rules": [
+                  {
+                    "field": "name",
+                    "type": "string",
+                    "required": true,
+                    "normalize": "trim"
+                  },
+                  {
+                    "field": "department",
+                    "type": "string",
+                    "required": true,
+                    "normalize": "lower"
+                  },
+                  {
+                    "field": "salary",
+                    "type": "number",
+                    "required": true,
+                    "min": 0
+                  }
+                ],
+                "aggregations": [
+                  {
+                    "group_by": "department",
+                    "field": "salary",
+                    "operation": "count",
+                    "name": "employee_count"
+                  },
+                  {
+                    "group_by": "department",
+                    "field": "salary",
+                    "operation": "sum",
+                    "name": "salary_total"
+                  },
+                  {
+                    "group_by": "department",
+                    "field": "salary",
+                    "operation": "avg",
+                    "name": "salary_average"
+                  }
+                ],
+                "exports": [
+                  {
+                    "type": "json",
+                    "path": "exports/results.json"
+                  },
+                  {
+                    "type": "csv",
+                    "path": "exports/results.csv"
+                  }
+                ],
+                "validation_workers": 4,
+                "transform_workers": 4,
+                "buffer_size": 64,
+                "timeout_seconds": 60
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Pipeline job accepted and queued for execution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid spec: unknown type/operation, path outside INPUT_DIRS/EXPORT_DIR, or a limit exceeded. All problems are reported together. Unknown fields are rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Capacity reached (MAX_ACTIVE_JOBS) or server shutting down; retry later",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid API key (when API_KEY is set)"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded; see Retry-After",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request body larger than MAX_REQUEST_BODY_BYTES"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Content-Type is not application/json"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Pipelines"
+        ],
+        "summary": "List all pipeline jobs",
+        "description": "Lists jobs newest first. The total number of matching jobs is returned in the X-Total-Count header.",
+        "operationId": "listPipelineJobs",
+        "responses": {
+          "200": {
+            "description": "List of pipeline jobs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Job"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Total-Count": {
+                "description": "Total matching jobs",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid paging or status parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid API key (when API_KEY is set)"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded; see Retry-After",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/JobStatus"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 50
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          }
+        ]
+      }
+    },
+    "/api/v1/pipelines/{id}": {
+      "get": {
+        "tags": [
+          "Pipelines"
+        ],
+        "summary": "Get pipeline job by ID",
+        "description": "Retrieves details, configuration, status, and summary metrics for a specific pipeline job.",
+        "operationId": "getPipelineJob",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the pipeline job",
+            "schema": {
+              "type": "string"
+            },
+            "example": "20261103T100000.000000000"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pipeline job details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pipeline job not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid API key (when API_KEY is set)"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded; see Retry-After",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Pipelines"
+        ],
+        "summary": "Delete pipeline job and artifacts",
+        "description": "Removes a completed, failed, or cancelled pipeline job, its quarantined errors, and on-disk records.",
+        "operationId": "deletePipelineJob",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the pipeline job",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Pipeline job deleted successfully"
+          },
+          "404": {
+            "description": "Pipeline job not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Pipeline job is still running (must be cancelled first)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid API key (when API_KEY is set)"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded; see Retry-After",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pipelines/{id}/progress": {
+      "get": {
+        "tags": [
+          "Pipelines"
+        ],
+        "summary": "Get real-time job progress & telemetry",
+        "description": "Returns processed counts, pending records, percent complete, processing rate (records/sec), and stage latencies.",
+        "operationId": "getPipelineProgress",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the pipeline job",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Real-time pipeline job progress telemetry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Progress"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pipeline job not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid API key (when API_KEY is set)"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded; see Retry-After",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pipelines/{id}/results": {
+      "get": {
+        "tags": [
+          "Pipelines"
+        ],
+        "summary": "Get processed records and computed aggregates",
+        "description": "Retrieves the valid processed records, group-by aggregation calculations, and export paths.",
+        "operationId": "getPipelineResults",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the pipeline job",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Processed records and computed aggregations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResultsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pipeline job not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid paging parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid API key (when API_KEY is set)"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded; see Retry-After",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pipelines/{id}/errors": {
+      "get": {
+        "tags": [
+          "Pipelines"
+        ],
+        "summary": "Get quarantined errors and rejected records",
+        "description": "Retrieves quarantined corrupted records, stage diagnostics, and error messages for inspection.",
+        "operationId": "getPipelineErrors",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the pipeline job",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Quarantined error details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "job_id": {
+                      "type": "string"
+                    },
+                    "errors": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/RecordError"
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "offset": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Pipeline job not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid paging parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid API key (when API_KEY is set)"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded; see Retry-After",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pipelines/{id}/cancel": {
+      "patch": {
+        "tags": [
+          "Pipelines"
+        ],
+        "summary": "Cancel an active pipeline job",
+        "description": "Triggers cooperative context cancellation, halting readers and worker pools promptly. Works from any replica: the instance running the job stops it within about a second.",
+        "operationId": "cancelPipelineJob",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Unique identifier of the pipeline job",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Cancellation signal received and propagated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "cancellation_requested"
+                    },
+                    "job_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Pipeline job is not running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Job not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid API key (when API_KEY is set)"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit exceeded; see Retry-After",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": [
+          "Observability"
+        ],
+        "summary": "Prometheus text metrics",
+        "description": "Prometheus text exposition. Requires the API key unless METRICS_PUBLIC=true. Stage latency is a summary (_sum/_count).",
+        "operationId": "getPrometheusMetrics",
+        "responses": {
+          "200": {
+            "description": "Prometheus metrics format",
+            "content": {
+              "text/plain; version=0.0.4": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "tags": [
+          "Observability"
+        ],
+        "summary": "Kubernetes and container liveness probe",
+        "description": "Liveness probe. Never checks dependencies. Includes build metadata.",
+        "operationId": "getHealthz",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "Observability"
+        ],
+        "summary": "Readiness probe",
+        "operationId": "readiness",
+        "security": [],
+        "description": "200 when the job store is reachable and the server accepts jobs; 503 during shutdown or when the store is unavailable.",
+        "responses": {
+          "200": {
+            "description": "Ready"
+          },
+          "503": {
+            "description": "Not ready"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/keys": {
+      "post": {
+        "tags": [
+          "API Keys"
+        ],
+        "summary": "Generate an expiring API key",
+        "operationId": "createApiKey",
+        "description": "Admin only: requires the bootstrap API_KEY. Generated keys can call every pipeline endpoint but cannot manage keys.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAPIKeyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Key created; the secret is in `key` and is never shown again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedAPIKey"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid name or expiry"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid API key"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Caller is not the admin key, or API_KEY is not configured"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "MAX_API_KEYS active keys already exist"
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "API Keys"
+        ],
+        "summary": "List API keys (no secrets)",
+        "operationId": "listApiKeys",
+        "description": "Admin only: requires the bootstrap API_KEY. Generated keys can call every pipeline endpoint but cannot manage keys.",
+        "responses": {
+          "200": {
+            "description": "Keys, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/APIKey"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid API key"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not the admin key"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/keys/{keyID}": {
+      "delete": {
+        "tags": [
+          "API Keys"
+        ],
+        "summary": "Revoke an API key",
+        "operationId": "revokeApiKey",
+        "description": "Admin only: requires the bootstrap API_KEY. Generated keys can call every pipeline endpoint but cannot manage keys. Revocation is immediate on the instance that handles it and reaches other replicas within 15 seconds.",
+        "parameters": [
+          {
+            "name": "keyID",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown key"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not the admin key"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "JobStatus": {
+        "type": "string",
+        "enum": [
+          "PENDING",
+          "RUNNING",
+          "COMPLETED",
+          "FAILED",
+          "CANCELLED"
+        ],
+        "example": "COMPLETED"
+      },
+      "Source": {
+        "type": "object",
+        "required": [
+          "type",
+          "name"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "Protocol or format type",
+            "enum": [
+              "csv",
+              "json",
+              "http",
+              "api"
+            ],
+            "example": "csv"
+          },
+          "name": {
+            "type": "string",
+            "description": "Unique identifier for this input source",
+            "example": "employees-csv"
+          },
+          "path": {
+            "type": "string",
+            "description": "Local file path; must be inside one of the INPUT_DIRS directories (symlinks resolved).",
+            "example": "samples/input.csv"
+          },
+          "url": {
+            "type": "string",
+            "description": "Remote http(s) URL. Private, loopback, link-local and cloud-metadata destinations are blocked at connection time.",
+            "example": "https://api.example.com/v1/data"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Optional HTTP request headers"
+          },
+          "format": {
+            "type": "string",
+            "description": "Explicit format override (csv or json)",
+            "example": "csv"
+          },
+          "records_path": {
+            "type": "string",
+            "example": "results",
+            "description": "JSON only: dot path to the records inside the document, e.g. `results` (RandomUser) or `current_weather` (Open-Meteo). Points to an array of objects or a single object."
+          }
+        }
+      },
+      "Rule": {
+        "type": "object",
+        "required": [
+          "field"
+        ],
+        "properties": {
+          "field": {
+            "type": "string",
+            "description": "Target record field name",
+            "example": "salary"
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Whether the field must be non-empty",
+            "example": true
+          },
+          "type": {
+            "type": "string",
+            "description": "Expected data type",
+            "enum": [
+              "string",
+              "number",
+              "boolean",
+              "bool"
+            ],
+            "example": "number"
+          },
+          "min": {
+            "type": "number",
+            "description": "Minimum numeric threshold",
+            "example": 0
+          },
+          "max": {
+            "type": "number",
+            "description": "Maximum numeric threshold",
+            "example": 500000
+          },
+          "pattern": {
+            "type": "string",
+            "description": "Regex pattern for string validation",
+            "example": "^[A-Z]{3}-\\d+$"
+          },
+          "normalize": {
+            "type": "string",
+            "description": "String normalization action",
+            "enum": [
+              "trim",
+              "lower",
+              "upper",
+              "title"
+            ],
+            "example": "lower"
+          },
+          "multiply": {
+            "type": "number",
+            "description": "Numeric scaling factor",
+            "example": 1.1
+          },
+          "add": {
+            "type": "number",
+            "description": "Numeric offset addition",
+            "example": 50
+          },
+          "default": {
+            "description": "Fallback default value if field is missing or empty"
+          },
+          "rename": {
+            "type": "string",
+            "example": "price_usd",
+            "description": "Rename the field after all rules are applied (field mapping)."
+          }
+        }
+      },
+      "Aggregation": {
+        "type": "object",
+        "required": [
+          "field",
+          "operation"
+        ],
+        "properties": {
+          "group_by": {
+            "type": "string",
+            "description": "Optional field name to group calculations by",
+            "example": "department"
+          },
+          "field": {
+            "type": "string",
+            "description": "Field to compute the aggregation over",
+            "example": "salary"
+          },
+          "operation": {
+            "type": "string",
+            "description": "Statistical aggregation operation",
+            "enum": [
+              "count",
+              "sum",
+              "avg",
+              "average",
+              "min",
+              "max"
+            ],
+            "example": "avg"
+          },
+          "name": {
+            "type": "string",
+            "description": "Custom alias name for the result key",
+            "example": "average_salary"
+          }
+        }
+      },
+      "ExportTarget": {
+        "type": "object",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "json",
+              "csv",
+              "sqlite",
+              "sql"
+            ],
+            "example": "json",
+            "description": "json (JSON array), csv (RFC 4180), sqlite (SQLite database file with records and aggregations tables), sql (portable SQL dump)"
+          },
+          "path": {
+            "type": "string",
+            "description": "Destination file inside EXPORT_DIR. Relative paths resolve inside the export directory; paths outside it are rejected with 400. Defaults to <EXPORT_DIR>/<job_id>.<ext>.",
+            "example": "exports/summary.json"
+          }
+        }
+      },
+      "Config": {
+        "type": "object",
+        "required": [
+          "sources",
+          "exports"
+        ],
+        "properties": {
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Source"
+            }
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            }
+          },
+          "aggregations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Aggregation"
+            }
+          },
+          "exports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExportTarget"
+            }
+          },
+          "validation_workers": {
+            "type": "integer",
+            "default": 4,
+            "example": 4,
+            "minimum": 0,
+            "maximum": 64,
+            "description": "Validation worker pool size (0 = server default, max MAX_WORKERS_PER_STAGE)"
+          },
+          "transform_workers": {
+            "type": "integer",
+            "default": 4,
+            "example": 4,
+            "minimum": 0,
+            "maximum": 64,
+            "description": "Transform worker pool size (0 = server default, max MAX_WORKERS_PER_STAGE)"
+          },
+          "buffer_size": {
+            "type": "integer",
+            "default": 64,
+            "example": 64,
+            "minimum": 0,
+            "maximum": 10000,
+            "description": "Inter-stage channel capacity (0 = server default, max MAX_BUFFER_SIZE)"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "default": 300,
+            "example": 60,
+            "minimum": 0,
+            "maximum": 3600,
+            "description": "Job timeout (0 = DEFAULT_TIMEOUT_SECONDS, max MAX_JOB_TIMEOUT_SECONDS)"
+          },
+          "max_records": {
+            "type": "integer",
+            "description": "Maximum records read per source (0 = unlimited)",
+            "example": 1000,
+            "minimum": 0
+          },
+          "dlq_path": {
+            "type": "string",
+            "description": "Optional dead-letter file (inside EXPORT_DIR) receiving every quarantined record as JSON. `dead_letter_path` is accepted as a deprecated alias.",
+            "example": "dlq.json"
+          },
+          "batch_size": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000,
+            "default": 500,
+            "description": "Records per storage transaction / export write"
+          },
+          "aggregation_workers": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 16,
+            "default": 1,
+            "description": "Parallel partial aggregators merged at the end (fan-out/fan-in). 0/1 = single aggregator."
+          },
+          "include_source_field": {
+            "type": "boolean",
+            "default": false,
+            "description": "Add a `_source` field (the source name) to every record, e.g. to group mixed sources with group_by: \"_source\"."
+          }
+        }
+      },
+      "Metrics": {
+        "type": "object",
+        "properties": {
+          "discovered": {
+            "type": "integer",
+            "example": 100
+          },
+          "processed": {
+            "type": "integer",
+            "example": 98
+          },
+          "valid": {
+            "type": "integer",
+            "example": 98
+          },
+          "rejected": {
+            "type": "integer",
+            "example": 2
+          },
+          "exported": {
+            "type": "integer",
+            "example": 98
+          },
+          "errors": {
+            "type": "integer",
+            "example": 2
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "records_per_second": {
+            "type": "number",
+            "example": 1250.5
+          },
+          "stage_latency_ns": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "Job": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "20261104T154047.892Z-6b84441b8f46"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "config": {
+            "$ref": "#/components/schemas/Config"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/Metrics"
+          },
+          "results_path": {
+            "type": "string",
+            "example": "exports/results.json"
+          },
+          "aggregates": {
+            "type": "object"
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every file published for the job (exports, aggregation sidecars, DLQ)"
+          },
+          "error": {
+            "type": "string",
+            "description": "Failure or cancellation reason for FAILED / CANCELLED jobs",
+            "example": "cancelled: cancelled by user request"
+          },
+          "owner": {
+            "type": "string",
+            "description": "Instance (replica) that ran the job",
+            "example": "pipeline-7d9c-1a2b3c"
+          }
+        }
+      },
+      "Progress": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "example": "20261104T154047.892Z-6b84441b8f46"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "percent_complete": {
+            "type": "number",
+            "example": 85.5,
+            "description": "(processed + rejected) / discovered. Sources are streamed, so discovered grows during ingestion; 100 once COMPLETED."
+          },
+          "processed": {
+            "type": "integer",
+            "example": 85
+          },
+          "discovered": {
+            "type": "integer",
+            "example": 100
+          },
+          "pending": {
+            "type": "integer",
+            "example": 15
+          },
+          "valid": {
+            "type": "integer",
+            "example": 85
+          },
+          "rejected": {
+            "type": "integer",
+            "example": 2
+          },
+          "error_count": {
+            "type": "integer",
+            "example": 2
+          },
+          "records_per_second": {
+            "type": "number",
+            "example": 450.2
+          },
+          "stage_latency_ns": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "error": {
+            "type": "string",
+            "description": "Failure or cancellation reason"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Present once the job is finished"
+          }
+        }
+      },
+      "RecordError": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "example": "employees-csv"
+          },
+          "index": {
+            "type": "integer",
+            "example": 4
+          },
+          "stage": {
+            "type": "string",
+            "example": "validation"
+          },
+          "message": {
+            "type": "string",
+            "example": "field \"salary\": value below minimum 0"
+          },
+          "record": {
+            "type": "object"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ResultsResponse": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "aggregations": {
+            "type": "object"
+          },
+          "export_path": {
+            "type": "string"
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "total_records": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "pipeline job not found"
+          }
+        }
+      },
+      "APIKey": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "key_Q2x7...",
+            "readOnly": true
+          },
+          "name": {
+            "type": "string",
+            "example": "ci-bot"
+          },
+          "prefix": {
+            "type": "string",
+            "example": "dpp_PjnoFMsV",
+            "description": "First characters of the key, for recognising it"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "expired",
+              "revoked"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revoked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_used_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Updated at most once per minute"
+          }
+        }
+      },
+      "CreatedAPIKey": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/APIKey"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "example": "dpp_PjnoFMsV...",
+                "description": "The secret. Returned only once; store it securely."
+              },
+              "warning": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "CreateAPIKeyRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 _.\\-]{0,63}$",
+            "example": "ci-bot"
+          },
+          "expires_in": {
+            "type": "string",
+            "example": "720h",
+            "description": "Go duration; between 1m and API_KEY_MAX_TTL (default 8760h). Default API_KEY_DEFAULT_TTL (720h)."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Alternative to expires_in"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "ApiKeyHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key",
+        "description": "API key from the API_KEY setting"
+      },
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Same API key sent as `Authorization: Bearer <key>`"
+      }
+    }
+  },
+  "security": [
+    {
+      "ApiKeyHeader": []
+    },
+    {
+      "BearerAuth": []
+    }
+  ]
+}

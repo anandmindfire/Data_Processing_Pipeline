@@ -59,6 +59,7 @@ func (s *MetricsService) GetErrors(ctx context.Context, id string, offset, limit
 	return errs, total, true, err
 }
 
+// calculatePercent derives completion percentage based on processed vs discovered records.
 func calculatePercent(m models.Metrics, status models.JobStatus) float64 {
 	if status == models.StatusCompleted {
 		return 100.0

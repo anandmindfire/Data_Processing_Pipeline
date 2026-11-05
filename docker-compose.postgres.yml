@@ -1,0 +1,82 @@
+# Multi-replica stack: PostgreSQL job store + two pipeline replicas sharing one export volume.
+#
+#   POSTGRES_PASSWORD=$(openssl rand -hex 16) API_KEY=$(openssl rand -hex 32) \
+#     docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
+#
+# Replica 1 listens on ${PORT:-8080}, replica 2 on ${PORT2:-8081}. Either can serve any job:
+# progress, results, cancel and delete work no matter which replica runs the job. In production
+# put both behind a load balancer and set TRUSTED_PROXIES to its address.
+
+x-pipeline-env: &pipeline-env
+  DATABASE_URL: "postgres://pipeline:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/pipeline?sslmode=disable"
+  JOB_LEASE: "30s"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: pipeline
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}"
+      POSTGRES_DB: pipeline
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pipeline -d pipeline"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    # Not published to the host: only the pipeline replicas reach it on the compose network.
+
+  pipeline:
+    environment:
+      <<: *pipeline-env
+      INSTANCE_ID: "pipeline-1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  pipeline-2:
+    image: data-processing-pipeline:latest
+    container_name: data-pipeline-server-2
+    ports:
+      - "${PORT2:-8081}:8080"
+    environment:
+      <<: *pipeline-env
+      INSTANCE_ID: "pipeline-2"
+      ADDR: ":8080"
+      API_BASE_URL: "${API_BASE_URL2:-http://localhost:${PORT2:-8081}}"
+      API_KEY: "${API_KEY:-}"
+      DATA_DIR: "/data"
+      EXPORT_DIR: "/app/exports"
+      INPUT_DIRS: "/app/samples,/app/inputs"
+      LOG_FORMAT: "json"
+    volumes:
+      - pipeline-exports:/app/exports # shared with replica 1: exports and deletes work from either
+      - ./samples:/app/samples:ro
+      - ./inputs:/app/inputs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pipeline:
+        condition: service_started # replica 1 builds the image
+    healthcheck:
+      test: ["CMD", "/pipeline-server", "--healthcheck"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    stop_grace_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

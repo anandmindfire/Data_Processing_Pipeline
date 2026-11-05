@@ -2,8 +2,8 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/anandmindfire/data-processing-pipeline.svg)](https://pkg.go.dev/github.com/anandmindfire/data-processing-pipeline)
 [![CI Pipeline](https://github.com/anandmindfire/Data_Processing_Pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/anandmindfire/Data_Processing_Pipeline/actions/workflows/ci.yml)
-[![OpenAPI Spec](https://img.shields.io/badge/OpenAPI-3.0.3-blue.svg)](internal/api/openapi.json)
-[![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8.svg)](go.mod)
+[![OpenAPI Spec](https://img.shields.io/badge/OpenAPI-3.0.3-blue.svg)](api/openapi.json)
+[![Go Version](https://img.shields.io/badge/Go-1.26-00ADD8.svg)](go.mod)
 [![Code Quality](https://img.shields.io/badge/code%20quality-golangci--lint-brightgreen.svg)](.golangci.yml)
 [![Zero Data Races](https://img.shields.io/badge/go%20test%20-race-brightgreen.svg)](Makefile)
 
@@ -17,7 +17,7 @@ A robust, production-oriented, concurrent data processing engine and job managem
 - [System Architecture](#system-architecture)
   - [How Data Moves Through the Pipeline](#how-data-moves-through-the-pipeline)
 - [Technology Stack](#technology-stack)
-- [Project Layout (Clean Architecture)](#project-layout-clean-architecture)
+- [Project Layout](#project-layout)
 - [Quickstart Guide](#quickstart-guide)
   - [Prerequisites](#prerequisites)
   - [Local Setup via Makefile](#local-setup-via-makefile)
@@ -33,6 +33,9 @@ A robust, production-oriented, concurrent data processing engine and job managem
   - [Centralized Error Quarantine & Dead-Letter Handling](#centralized-error-quarantine--dead-letter-handling)
   - [Cooperative Cancellation Hierarchy](#cooperative-cancellation-hierarchy)
   - [Transient HTTP Retries with Exponential Backoff](#transient-http-retries-with-exponential-backoff)
+- [API Keys](#api-keys)
+- [Scaling to Multiple Replicas](#scaling-to-multiple-replicas)
+- [Security](#security)
 - [Testing & Quality Assurance](#testing--quality-assurance)
 - [Continuous Integration (CI/CD)](#continuous-integration-cicd)
 - [Contributing & Community](#contributing--community)
@@ -42,14 +45,15 @@ A robust, production-oriented, concurrent data processing engine and job managem
 
 ## Key Architectural Highlights
 
-- **Clean Architecture & Separation of Concerns:** Decoupled packages with clear boundaries (`models`, `ingestion`, `validation`, `transformation`, `aggregation`, `export`, `storage`, `jobs`, `pipeline`, `api`, `metrics`, `config`).
+- **Clean Architecture & Separation of Concerns:** Decoupled packages with clear boundaries (`models`, `ingestion`, `validation`, `transformation`, `aggregation`, `export`, `storage`, `services`, `pipeline`, `api`, `metrics`, `config`). See [Project Layout](#project-layout).
 - **Bounded Channels & Backpressure:** Pipeline stages communicate strictly via typed, bounded channels (`recordsCh` ➔ `validatedCh` ➔ `transformedCh` ➔ `resultCh`), eliminating unbounded heap growth and providing natural backpressure on disk I/O and network requests.
 - **Actor-Style Concurrency (Fan-Out / Fan-In):** Dedicated goroutines per ingestion source stream records in parallel; configurable worker pools parallelize CPU-bound validation and transformation; single-consumer goroutines handle aggregation, export, progress tracking, and error collection without mutex lock contention.
 - **Hierarchical Cooperative Cancellation:** Every pipeline job runs under a hierarchical `context.Context` with configurable timeouts. Cancellation via `PATCH /api/v1/pipelines/:id/cancel` propagates instantly to disk readers, HTTP requests, and worker pool loops.
 - **Centralized Error Quarantine:** Faulty or corrupted records are isolated with stage and field diagnostic metadata into a centralized error collection over `errorCh`. Valid records continue processing to completion.
 - **Dead-Letter Handling:** Configurable destination path (`dlq_path`) persists quarantined invalid records and error traces to disk upon completion.
 - **Streaming Multi-Sink Export:** A dedicated export goroutine streams record batches to every target while the job runs: JSON, RFC 4180 CSV (deterministic union headers), a real **SQLite database** (`records` + `aggregations` tables, via `database/sql`), and a portable SQL dump. Files are written to `<path>.part` and atomically renamed only when the job completes, so cancelled or failed runs never publish partial output.
-- **Durable Job Store:** Job metadata, processed records, and record errors are persisted in an embedded SQLite database (`DATA_DIR/pipeline.db`, WAL mode, versioned migrations) with batched transactional writes.
+- **Durable Job Store, single node or multi-replica:** Jobs, records and errors are persisted with batched multi-row writes and versioned migrations, in embedded SQLite (`DATA_DIR/pipeline.db`, default) or in **PostgreSQL** (`DATABASE_URL`). With PostgreSQL several replicas share the store: any replica serves any job, cancellation works across replicas, and jobs of a crashed replica are failed after `JOB_LEASE`.
+- **Expiring API Keys:** The admin key (`API_KEY`) issues, lists and revokes managed keys with an expiry (`/api/v1/auth/keys`). Generated keys can call every pipeline endpoint; only hashes are stored.
 - **Live Progress:** The progress tracker persists a metrics snapshot every 500 ms while a job runs, so `GET /progress` reports real-time counts, throughput, and stage latencies.
 - **Secure by Default:** Local source paths are sandboxed to `INPUT_DIRS`, every export/DLQ path to `EXPORT_DIR` (symlink-aware); HTTP sources are SSRF-protected at dial time (private, loopback, link-local and metadata ranges blocked, redirects re-validated); per-job worker, buffer, batch, timeout, and source limits are enforced at submission.
 - **Lifecycle Safety:** `SIGTERM` stops intake, cancels running jobs (recorded as `CANCELLED: server shutting down`), and drains them before exit; jobs interrupted by a crash are marked `FAILED` on the next start.
@@ -87,7 +91,7 @@ flowchart LR
 1. **Ingestion (Fan-Out):** Concurrent readers stream data from CSV files, JSON files, or HTTP APIs into a bounded channel (`recordsCh`). HTTP requests automatically retry transient failures up to 3 times with exponential backoff.
 2. **Validation (Worker Pool):** Parallel workers validate records against schema and business rules (types, min/max, regex). Invalid rows are diverted to `errorCh` without stopping the pipeline.
 3. **Transformation (Worker Pool):** Parallel workers normalize strings, apply mathematical scaling, and set fallback default values.
-4. **Aggregation (Fan-In):** A single consumer accumulates group-by statistics (`count`, `sum`, `avg`, `min`, `max`), eliminating lock contention on the hot path.
+4. **Aggregation (Fan-In, optionally partitioned):** By default one goroutine accumulates group-by statistics (`count`, `sum`, `avg`, `min`, `max`) without locks. With `aggregation_workers > 1`, each worker owns a partial aggregator and sends it on a partials channel when done; one merger goroutine folds the partials into the final result (all operations are associative, so the result is identical).
 5. **Export (Streaming, Multi-Sink):** A single export goroutine batches records (`batch_size`, default 500), persists each batch to the job store in one transaction, and streams it to every export target. Aggregations are written into the SQLite database / SQL dump, and as a `<name>.aggregations.json` sidecar for JSON/CSV exports. Quarantined records can be written to a dead-letter file (`dlq_path`).
 6. **Side channels:** `errorCh` feeds one error-collector goroutine (batched persistence); `progressCh` feeds one progress-tracker goroutine that owns the job metrics and persists live snapshots.
 
@@ -97,162 +101,79 @@ flowchart LR
 
 | Component | Technology | Rationale & Industry Standard Alignment |
 | :--- | :--- | :--- |
-| **Language** | **Go 1.23+** | Idiomatic Go, memory efficiency, native goroutines, and first-class channel concurrency. |
+| **Language** | **Go 1.26 (toolchain pinned in `go.mod`)** | Idiomatic Go, memory efficiency, native goroutines, and first-class channel concurrency. |
 | **REST API Transport** | **`net/http`** | Go standard library HTTP server with production-grade read/write/idle timeouts. |
 | **HTTP Routing** | **`github.com/go-chi/chi/v5`** | Zero-allocation lightweight router supporting URL parameter routing and composable middleware. |
 | **Logging** | **`log/slog`** | Standard library structured, contextual JSON/text logging. |
 | **Metrics & Telemetry** | **Prometheus** | Industry standard exposition format at `/metrics` (job counters, rate gauges, stage latency distributions). |
 | **Documentation** | **OpenAPI 3.0.3 & Swagger UI** | Zero-dependency embedded Swagger UI served at `/docs` with interactive API execution. |
-| **Persistence** | **SQLite via `database/sql` (`modernc.org/sqlite`, pure Go)** | `storage.Repository` with an SQLite implementation (production) and an in-memory implementation (tests). No CGO, so the binary stays static. |
+| **Persistence** | **`database/sql` with SQLite (`modernc.org/sqlite`) or PostgreSQL (`pgx`)** | One `SQLRepository` with two dialects; in-memory implementation for tests. Pure Go drivers, so the binary stays static. |
 | **Export Formats** | **JSON, CSV, SQLite DB, SQL dump** | Streamed JSON array, RFC 4180 CSV, SQLite database file (`records`, `aggregations`), and portable SQL dump. |
 | **Containerization** | **Docker & Distroless** | Multi-stage build yielding minimal, secure, non-root Debian 12 distroless container images. |
-| **CI / Automation** | **GitHub Actions** | Automated CI pipeline checking formatting, static analysis (`go vet`), race testing, and container builds. |
+| **CI / Automation** | **GitHub Actions** | golangci-lint (incl. gosec), race tests with a coverage gate, govulncheck, container smoke test, and Trivy image scan; actions pinned to commit SHAs; Dependabot updates. |
 
 ---
 
-## Project Layout (Clean Architecture)
+## Project Layout
+
+The layout follows the common Go application convention: `cmd/` for entry points, `internal/`
+for all application code (not importable by other modules), and `api/` for the public contract.
+Dependencies point inward: `handlers → services → pipeline → stages → models`; only
+`bootstrap` wires concrete implementations together.
 
 ```
-pipeline-system/
-├── cmd/
-│   └── server/
-│       └── main.go                 # Application entry point & graceful shutdown
-│
-├── configs/
-│   ├── config.go                   # Config struct & validation
-│   ├── env.go                      # Environment loader (.env & OS env)
-│   ├── default.go                  # Default runtime values
-│   └── default.json                # Sample JSON configuration
-│
+.
+├── api/                         # Public API contract
+│   ├── openapi.json             #   OpenAPI 3 spec (served at /docs/openapi.json)
+│   └── spec.go                  #   go:embed of the spec
+├── cmd/server/                  # Entry point: flags, signals, graceful shutdown, --healthcheck
 ├── internal/
+│   ├── bootstrap/               # Composition root: config → store → pipeline → services → router
+│   ├── config/                  # Defaults, JSON file, .env and environment overrides, validation
+│   ├── buildinfo/               # Version/commit injected with -ldflags
 │   ├── api/
-│   │   ├── controllers/
-│   │   │   └── pipeline_controller.go # REST handlers (CRUD, progress, cancel, metrics)
-│   │   ├── routes/
-│   │   │   └── routes.go           # Route definitions & URL dispatching
-│   │   ├── middleware/
-│   │   │   ├── logger.go           # Structured HTTP logger (slog)
-│   │   │   ├── recovery.go         # Panic recovery middleware
-│   │   │   ├── request_id.go       # Unique request tracing (X-Request-ID)
-│   │   │   ├── cors.go             # Cross-Origin Resource Sharing
-│   │   │   ├── timeout.go          # Request deadline management
-│   │   │   └── ratelimit.go        # Per-IP token-bucket rate limiter
-│   │   ├── dto/
-│   │   │   ├── request/
-│   │   │   │   ├── create_pipeline_request.go
-│   │   │   │   └── cancel_pipeline_request.go
-│   │   │   └── response/
-│   │   │       ├── pipeline_response.go
-│   │   │       ├── progress_response.go
-│   │   │       ├── error_response.go
-│   │   │       └── common_response.go
-│   │   └── validator/
-│   │       ├── request_validator.go # Spec, limits & enum validation
-│   │       └── paths.go            # Input/export path sandboxing
-│   │
-│   ├── services/
-│   │   ├── pipeline_service.go     # Application service orchestrator
-│   │   ├── job_service.go          # Job lifecycle & concurrency control
-│   │   ├── metrics_service.go      # Telemetry & progress calculations
-│   │   └── export_service.go       # Dataset export & artifact cleanup
-│   │
-│   ├── storage/
-│   │   ├── repository.go           # Repository contract (jobs, records, errors, paging)
-│   │   ├── sqlite.go               # SQLite job store (production)
-│   │   └── memory.go               # In-memory store (tests)
-│   │
-│   ├── pipeline/
-│   │   ├── engine.go               # Pipeline orchestrator & executor
-│   │   ├── worker_pool.go          # Concurrent worker pool implementation
-│   │   ├── channels.go             # Bounded channel mesh topology
-│   │   ├── context.go              # Timeout & cancellation context
-│   │   ├── coordinator.go          # Stage-to-stage orchestration
-│   │   ├── progress_tracker.go     # Real-time progress tracking
-│   │   ├── error_collector.go      # Centralized error & dead-letter handler
-│   │   └── metrics.go              # Stage latencies & throughput metrics
-│   │
-│   ├── ingestion/
-│   │   ├── reader.go               # Reader interface & orchestrator
-│   │   ├── csv_reader.go           # Streaming CSV reader
-│   │   ├── json_reader.go          # Streaming JSON & NDJSON reader
-│   │   ├── api_reader.go           # Remote HTTP/API reader with retries
-│   │   ├── ssrf.go                 # SSRF-safe HTTP client (dial-time IP checks)
-│   │   └── factory.go              # Stream parser factory
-│   │
-│   ├── validation/
-│   │   ├── validator.go            # Validator interface & coordination
-│   │   ├── schema_validator.go     # Type checking & required fields
-│   │   └── business_validator.go   # Min/max thresholds & regex validation
-│   │
-│   ├── transformation/
-│   │   ├── transformer.go          # Transformer interface & engine
-│   │   ├── normalize.go            # String casing & trimming
-│   │   ├── enrichment.go           # Math scaling & fallback injection
-│   │   └── mapping.go              # Field mapping & record cloning
-│   │
-│   ├── aggregation/
-│   │   ├── aggregator.go           # Streaming aggregation engine
-│   │   ├── statistics.go           # Count, sum, average, min, max stats
-│   │   ├── groupby.go              # Group-by key resolution
-│   │   └── summary.go              # Aggregation finalization & formatting
-│   │
-│   ├── export/
-│   │   ├── exporter.go             # Streaming export session & atomic publish
-│   │   ├── file_sinks.go           # JSON, CSV & SQL-dump sinks
-│   │   └── sqlite_sink.go          # SQLite database sink
-│   │
-│   ├── models/
-│   │   ├── job.go                  # Job entity & lifecycle states
-│   │   ├── record.go               # Record map dictionary
-│   │   ├── error.go                # RecordError domain model
-│   │   ├── metrics.go              # Metrics & Progress telemetry
-│   │   ├── aggregation.go          # Aggregation specifications
-│   │   └── pipeline.go             # Pipeline configuration, Source, Rule
-│   │
-│   ├── database/
-│   │   ├── connection.go           # SQL pool & connection manager
-│   │   ├── migration.go            # Versioned schema migrations
-│   │   └── sqlite.go               # SQLite driver, DSN pragmas (WAL, busy timeout)
-│   │
-│   └── bootstrap/
-│       ├── app.go                  # Application runtime lifecycle
-│       ├── dependency.go           # Dependency injection container
-│       └── router.go               # HTTP router & middleware chain
-│
-├── pkg/
-│   ├── logger/                     # Global slog logger initialization
-│   ├── errors/                     # Standardized error codes & sentinels
-│   ├── response/                   # Reusable HTTP JSON response helpers
-│   ├── utils/                      # File, pointer, json, csv, time utils
-│   ├── constants/                  # Status, headers, stage constants
-│   ├── enums/                      # SourceType, ExportType, JobStatus enums
-│   ├── interfaces/                 # Core engine contract interfaces
-│   └── types/                      # Common types & pagination helpers
-│
-├── test/
-│   ├── integration/                # End-to-end integration tests
-│   ├── unit/                       # Component unit tests
-│   ├── mocks/                      # Test mocks and stubs
-│   └── testdata/                   # Sample datasets (CSV, JSON)
-│
-├── docs/                           # Architecture reports & OpenAPI spec
-├── samples/                        # Pipeline execution examples
-├── scripts/                        # Load testing and benchmark scripts
-├── .env.example                    # Environment template
-├── Makefile                        # Build, test, and verification tasks
-├── Dockerfile                      # Distroless container image
-├── docker-compose.yml              # Multi-container local stack
-├── go.mod                          # Go module dependencies
-└── README.md                       # Comprehensive system documentation
+│   │   ├── handlers/            #   HTTP handlers: pipelines, probes (/healthz, /readyz), docs
+│   │   ├── middleware/          #   request ID, recovery, security headers, logging, CORS,
+│   │   │                        #   rate limit (trusted-proxy aware), API key auth, timeout
+│   │   ├── routes/              #   /api/v1/pipelines route table
+│   │   ├── validator/           #   job-spec validation, limits, path sandboxing
+│   │   ├── dto/{request,response}/ # wire formats
+│   │   └── respond/             #   JSON response helpers
+│   ├── services/                # Use cases: job lifecycle, replica coordination, results, retention
+│   ├── auth/                    # Expiring API keys: issue, verify (cached), revoke, purge
+│   ├── pipeline/                # Engine: channels, worker pools, aggregation fan-in, export stage,
+│   │                            #   progress tracker, error collector, DLQ
+│   ├── ingestion/               # CSV / JSON / NDJSON / HTTP readers, records_path, size limits,
+│   │                            #   SSRF-safe HTTP client with retries
+│   ├── validation/              # Schema & business rules
+│   ├── transformation/          # Type conversion, normalization, scaling, defaults, rename
+│   ├── aggregation/             # count/sum/avg/min/max, group-by, mergeable partials
+│   ├── export/                  # Streaming sinks: JSON, CSV, SQLite DB, SQL dump (atomic publish)
+│   ├── storage/                 # Repository contract; SQL repository (SQLite + PostgreSQL), memory (tests)
+│   ├── metrics/                 # Prometheus collector & exposition
+│   └── models/                  # Domain types: JobSpec, Job, Record, Metrics, RecordError
+├── test/integration/            # End-to-end tests through the real HTTP router
+├── samples/                     # Sample inputs, job specs, and recorded API responses
+├── scripts/                     # smoke_test.sh (container E2E), load_test.sh, run_pipeline.sh
+├── docs/                        # Design report and production-readiness notes
+├── .github/                     # CI workflow, Dependabot, issue/PR templates
+├── Dockerfile                   # Multi-stage, static, distroless, non-root image
+├── docker-compose.yml           # Single-instance stack with hardened container settings
+├── docker-compose.postgres.yml  # Override: PostgreSQL + a second replica
+├── Makefile                     # build, test, cover, lint, vuln, docker targets (`make help`)
+└── SECURITY.md                  # Security model and vulnerability reporting
 ```
+
+Unit tests live next to the code they test (`*_test.go`); `test/integration` holds the
+cross-package end-to-end tests.
 
 ---
 
 ## Quickstart Guide
 
 ### Prerequisites
-- **Go 1.23+** (or Docker)
-- **Make** (optional, recommended)
+- **Go 1.26** (the exact patched toolchain is pinned in `go.mod` and fetched automatically), or Docker
+- **Make** (optional, recommended); `make tools` installs golangci-lint and govulncheck
 
 ### Local Setup via Makefile
 
@@ -299,7 +220,7 @@ The server implements 12-factor configuration loading default JSON configuration
 | `API_BASE_URL` / `BASE_URL` | string | `http://localhost:8080` | Public base URL shown in the API docs |
 | `HEALTHCHECK_URL` | string | local listener | Override the URL probed by `--healthcheck` |
 | `API_BASE_PATH` / `API_PREFIX` | string | `/api/v1` | Routing prefix path for pipeline REST endpoints |
-| `API_KEY` | string | `""` | Optional secret token for Bearer/X-API-Key authentication |
+| `API_KEY` | string | `""` | API key(s) for `X-API-Key` / `Bearer` auth; ≥ 16 chars, comma-separated for rotation. Empty = unauthenticated (local only) |
 | `DATA_DIR` | string | `data` | Directory holding the SQLite job store (`pipeline.db`) |
 | `EXPORT_DIR` | string | `exports` | Export sandbox: every export and DLQ path must be inside it |
 | `INPUT_DIRS` | list | `samples` | Comma-separated directories local file sources may read from |
@@ -309,6 +230,20 @@ The server implements 12-factor configuration loading default JSON configuration
 | `MAX_JOB_TIMEOUT_SECONDS` | int | `3600` | Upper bound for `timeout_seconds` |
 | `MAX_SOURCES_PER_JOB` / `MAX_EXPORTS_PER_JOB` | int | `16` / `8` | Spec size limits |
 | `SHUTDOWN_TIMEOUT` | duration | `25s` | Time to cancel and drain running jobs on `SIGTERM` |
+| `REQUEST_TIMEOUT` | duration | `30s` | Deadline for each API request |
+| `TRUSTED_PROXIES` | list | *(none)* | CIDRs of reverse proxies whose `X-Forwarded-For` is trusted for client IPs |
+| `CORS_ALLOWED_ORIGINS` | list | *(none)* | Browser origins allowed by CORS (`*` = any; none = same-origin only) |
+| `METRICS_PUBLIC` | bool | `false` | Serve `/metrics` without the API key |
+| `DOCS_ENABLED` | bool | `true` | Serve the Swagger UI and OpenAPI spec |
+| `MAX_SOURCE_BYTES` | int | `1073741824` | Maximum bytes read from one source (file or HTTP body) |
+| `MAX_AGGREGATION_WORKERS` | int | `16` | Upper bound for `aggregation_workers` |
+| `JOB_RETENTION` | duration | `168h` | Finished jobs and their exports (and expired/revoked API keys) older than this are purged hourly (`0` keeps forever) |
+| `DATABASE_URL` | string | *(empty)* | `postgres://…` enables the shared PostgreSQL store for multiple replicas; empty = SQLite in `DATA_DIR` |
+| `DB_MAX_OPEN_CONNS` / `DB_MAX_IDLE_CONNS` / `DB_CONN_MAX_LIFETIME` | int / int / duration | `20` / `10` / `30m` | PostgreSQL connection pool |
+| `INSTANCE_ID` | string | hostname-random | Replica identity recorded as the job `owner` |
+| `JOB_LEASE` | duration | `30s` | A replica that stops heartbeating for this long has its running jobs failed by the others |
+| `API_KEY_DEFAULT_TTL` / `API_KEY_MAX_TTL` | duration | `720h` / `8760h` | Default and maximum lifetime of generated API keys |
+| `MAX_API_KEYS` | int | `100` | Maximum number of active generated keys |
 | `READ_TIMEOUT` / `WRITE_TIMEOUT` / `IDLE_TIMEOUT` | duration | `15s` / `30s` / `60s` | HTTP server timeouts |
 | `MAX_ACTIVE_JOBS` | int | `10` | Maximum number of concurrent running jobs |
 | `RATE_LIMIT_RPS` | float | `50.0` | Token bucket refill rate per second per IP |
@@ -338,10 +273,17 @@ Server defaults are applied at submission, so `GET /pipelines/{id}` shows the ef
 | `GET` | `/api/v1/pipelines/{id}/errors` | `200 OK` | A page of errors and failed records (`?limit=&offset=`, default 100) |
 | `PATCH`| `/api/v1/pipelines/{id}/cancel` | `202 Accepted` | Trigger cooperative cancellation on a running job |
 | `DELETE`| `/api/v1/pipelines/{id}` | `204 No Content` | Delete a finished job, state entries, and export files |
-| `GET` | `/docs` | `200 OK` | Interactive embedded Swagger UI API documentation |
-| `GET` | `/docs/openapi.json` | `200 OK` | OpenAPI 3.0.3 specification JSON |
-| `GET` | `/metrics` | `200 OK` | Prometheus text exposition metrics endpoint |
-| `GET` | `/healthz` | `200 OK` | Liveness and readiness health probe |
+| `GET` | `/docs` | `200 OK` | Swagger UI (disable with `DOCS_ENABLED=false`) |
+| `GET` | `/docs/openapi.json` | `200 OK` | OpenAPI 3 specification |
+| `GET` | `/metrics` | `200 OK` | Prometheus metrics (requires the API key unless `METRICS_PUBLIC=true`) |
+| `GET` | `/healthz` | `200 OK` | Liveness probe with build info (never checks dependencies) |
+| `GET` | `/readyz` | `200` / `503` | Readiness probe: job store reachable and not shutting down |
+| `POST` | `/api/v1/auth/keys` | `201 Created` | **Admin:** generate an expiring API key (secret returned once) |
+| `GET` | `/api/v1/auth/keys` | `200 OK` | **Admin:** list keys with status (`active`/`expired`/`revoked`), never secrets |
+| `DELETE` | `/api/v1/auth/keys/{keyID}` | `204 No Content` | **Admin:** revoke a key |
+
+When `API_KEY` is set, every endpoint except the probes and docs requires `X-API-Key: <key>` or
+`Authorization: Bearer <key>`.
 
 ### Interactive Swagger UI
 
@@ -371,12 +313,38 @@ curl -sS -X POST http://localhost:8080/api/v1/pipelines \
 }
 ```
 
-#### 2. Submit a Mixed Source Job (CSV + JSON + HTTP REST API)
+#### 2. "Global Daily Report": CSV URL + CoinGecko + Open-Meteo
+The assignment's mixed-source example, using live public APIs ([samples/global_daily_report.json](samples/global_daily_report.json)):
+
 ```bash
 curl -sS -X POST http://localhost:8080/api/v1/pipelines \
   -H "Content-Type: application/json" \
-  -d @samples/mixed_job.json
+  -d @samples/global_daily_report.json
 ```
+
+It shows the features that make heterogeneous sources work together:
+
+| Feature | Spec field | Used for |
+| :--- | :--- | :--- |
+| Remote CSV | `"type": "csv", "url": ...` | `hw_200.csv` population sample (malformed header quotes are tolerated) |
+| Nested JSON | `"records_path": "current_weather"` | Open-Meteo wraps the reading in an object; `results` would select RandomUser's array |
+| Field mapping | `"rename": "price_usd"` | Give each source's fields report-friendly names |
+| Origin tagging | `"include_source_field": true` | Adds `_source`, so `group_by: "_source"` counts records per source |
+| Parallel aggregation | `"aggregation_workers": 2` | Partial aggregators merged at the end |
+
+Recorded result (aggregates abbreviated):
+
+```json
+{
+  "records_per_source": {"population-csv": 200, "crypto-prices": 20, "weather-now": 1},
+  "avg_height_in": {"_all": 67.95},
+  "total_price_usd": {"_all": 86087.51},
+  "best_crypto_change_24h_pct": {"_all": 5.95},
+  "temperature_c": {"_all": 27.6}
+}
+```
+
+`samples/mixed_job.json` is an offline variant (local CSV + JSON) grouped by `_source`.
 
 #### 3. Poll Real-Time Progress & Latencies
 ```bash
@@ -484,6 +452,74 @@ Local sources must be inside `INPUT_DIRS`; export and `dlq_path` targets must be
 
 ---
 
+## API Keys
+
+`API_KEY` is the **admin key**. Use it to issue expiring keys for clients, CI jobs or teammates;
+those keys can call every pipeline, progress, results, errors and metrics endpoint, but cannot
+manage keys (so a key can never mint a longer-lived one).
+
+```bash
+# Issue a key valid for 30 days (expires_in is a Go duration; or pass "expires_at": "<RFC 3339>")
+curl -sS -X POST http://localhost:8080/api/v1/auth/keys \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d '{"name": "ci-bot", "expires_in": "720h"}'
+```
+
+```json
+{
+  "id": "key_Xb2…",
+  "name": "ci-bot",
+  "prefix": "dpp_PjnoFMsV",
+  "status": "active",
+  "created_at": "2026-11-05T06:47:59Z",
+  "expires_at": "2026-12-05T06:47:59Z",
+  "key": "dpp_PjnoFMsV…(43 characters)",
+  "warning": "Store this key now. It is shown only once and cannot be retrieved later."
+}
+```
+
+```bash
+# Use it like the admin key (X-API-Key or Bearer)
+curl -sS http://localhost:8080/api/v1/pipelines -H "X-API-Key: dpp_PjnoFMsV…"
+
+# List keys (status, prefix, last use; never secrets) and revoke one
+curl -sS http://localhost:8080/api/v1/auth/keys -H "Authorization: Bearer $API_KEY"
+curl -sS -X DELETE http://localhost:8080/api/v1/auth/keys/key_Xb2… -H "Authorization: Bearer $API_KEY"
+```
+
+- Keys carry 256 bits of randomness and are stored only as SHA-256 hashes, with a display prefix.
+- Expired and revoked keys get `401`. Revocation applies immediately on the instance that
+  handled it and on other replicas within 15 seconds (verification cache).
+- Lifetimes must lie between 1 minute and `API_KEY_MAX_TTL`; at most `MAX_API_KEYS` keys may be active.
+- Request logs record the `key_id` that made each call (never the secret).
+- Without `API_KEY` authentication is disabled and key management returns `403`.
+
+---
+
+## Scaling to Multiple Replicas
+
+SQLite (the default) keeps everything in one file for a single instance. To run several
+replicas, point them all at PostgreSQL and a shared export directory:
+
+```bash
+POSTGRES_PASSWORD=$(openssl rand -hex 16) API_KEY=$(openssl rand -hex 32) \
+  docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
+# replica 1 on :8080, replica 2 on :8081, one PostgreSQL, one shared exports volume
+```
+
+| Concern | How replicas cooperate |
+| :--- | :--- |
+| Schema | Migrations run under a PostgreSQL advisory lock, so replicas can start together |
+| Any replica serves any job | Jobs, progress snapshots, records and errors live in the shared store |
+| Cancel | `PATCH …/cancel` on any replica flags the job; its owner stops it within about a second |
+| Delete | Refused while the job is PENDING/RUNNING on any replica |
+| Crashed replica | Owners heartbeat their jobs every `JOB_LEASE`/6; others fail jobs silent for `JOB_LEASE` (verified: 9 s after `kill -9` with a 6 s lease) |
+| Export files | `EXPORT_DIR` must be shared storage (RWX volume, NFS, EFS) so results and deletes work from any replica |
+| Limits | `MAX_ACTIVE_JOBS` and the rate limiter apply per replica |
+| API keys | Stored centrally; revocations propagate within 15 s |
+
+---
+
 ## Concurrency & Fault Tolerance
 
 ### Bounded Channels & Memory Backpressure
@@ -516,32 +552,58 @@ Remote HTTP sources incorporate automatic retry logic for transient failures (e.
 
 ---
 
+## Security
+
+The service accepts file paths, URLs and resource sizes from clients, so the server, not the
+client, decides what it may read, write, connect to, and spend. Summary of the controls (details
+and the deployment checklist are in [SECURITY.md](SECURITY.md)):
+
+| Area | Control |
+| :--- | :--- |
+| Authentication | Admin key (`API_KEY`, ≥ 16 chars, rotatable) plus generated expiring keys (hashed at rest, revocable, admin-only management); constant-time comparison; `/metrics` protected by default |
+| File access | Sources confined to `INPUT_DIRS`, exports/DLQ to `EXPORT_DIR`; symlinks resolved; delete only removes files inside `EXPORT_DIR` |
+| Outbound HTTP | SSRF checks at dial time (private, loopback, link-local, CGNAT, metadata), redirects re-validated, proxies ignored, per-source byte cap |
+| Abuse limits | Per-job worker/buffer/batch/timeout/source limits, request body cap, strict JSON, per-IP rate limit with trusted-proxy handling and a bounded client table |
+| Browser | Locked-down CSP and security headers on API responses; the Swagger page uses pinned assets with SRI and a hash-based CSP; CORS off unless allowlisted |
+| Runtime | Static binary, distroless non-root image, read-only root FS and dropped capabilities in compose, request timeouts, graceful shutdown |
+| Supply chain | Patched Go toolchain pinned, govulncheck, Trivy, gosec, SHA-pinned actions, Dependabot |
+| Data lifecycle | Finished jobs and their files purged after `JOB_RETENTION` |
+
+---
+
 ## Testing & Quality Assurance
 
-The codebase includes comprehensive test suites spanning parsers, validators, transformers, aggregators, exporters, mock transports, API handlers, and end-to-end integration flows:
+Unit tests sit next to the code; `test/integration` drives full jobs through the real HTTP router.
+Total statement coverage is about 85% (measured across packages), and CI fails below 75%.
 
 ```bash
-# Run all tests across packages
-go test -v ./...
-
-# Verify zero race conditions using Go's race detector
-go test -race -count=1 ./...
-
-# Run static analysis
-go vet ./...
-
-# Run complete verification suite (fmt + vet + race)
-make check
+make tools   # once: installs golangci-lint and govulncheck
+make race    # all tests with the race detector
+make cover   # race tests + coverage gate (COVER_MIN=75)
+make lint    # golangci-lint: gofmt/goimports, gosec, staticcheck, errorlint, ...
+make vuln    # govulncheck against dependencies and the Go toolchain
+make check   # lint + vet + race + vuln
+make docker-smoke  # build the image and run scripts/smoke_test.sh against it
 ```
+
+What the suites cover, beyond parsers, validators and transformers:
+
+- **End to end:** CSV + JSON + mocked HTTP sources through validation, transformation, aggregation, every export type, DLQ, progress, errors, and delete.
+- **Concurrency:** live progress while running, cancellation (no partial exports), graceful shutdown, restart recovery, parallel aggregation equal to sequential, and goroutine-leak checks.
+- **Security:** path traversal and symlink escapes, SSRF at dial time, spec limits, strict JSON (unknown fields, 413, 415), API key rotation, spoofed `X-Forwarded-For`, CORS allowlist, request-ID injection, CSP/SRI on the docs page.
 
 ---
 
 ## Continuous Integration (CI/CD)
 
-Automated continuous integration runs on every push and pull request via [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
-1. **Formatting & Static Analysis:** Checks `gofmt` compliance and executes `go vet` and `golangci-lint`.
-2. **Race Condition Tests:** Runs `go test -race -v -covermode=atomic ./...` across all packages with zero data races.
-3. **Binary & Container Build Verification:** Compiles `bin/pipeline-server` and builds the multi-stage distroless Docker image.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull request to `main` and `Dev`:
+
+1. **Lint:** golangci-lint v2 (blocking), plus a `go mod tidy` drift check.
+2. **Tests:** race detector, integration tests, and the 75% coverage gate; coverage uploaded as an artifact.
+3. **Vulnerabilities:** `govulncheck` over dependencies and the pinned Go toolchain.
+4. **Container:** builds the image, runs `scripts/smoke_test.sh` against it with a read-only root filesystem, all capabilities dropped and an API key required, then scans it with Trivy (fails on fixable HIGH/CRITICAL).
+
+Third-party actions are pinned to commit SHAs; [Dependabot](.github/dependabot.yml) keeps Go modules, base images and actions current.
 
 ---
 
@@ -559,6 +621,7 @@ We welcome contributions to the Data Processing Pipeline! Please review our comm
 
 - **[Design Report (<= 1 Page)](docs/design-report.md):** Executive report summarizing design choices, the concurrency model, channel lifecycle ownership, and engineering trade-offs.
 - **[Production Readiness Analysis](docs/production-readiness.md):** In-depth engineering blueprint contrasting current codebase achievements with enterprise cloud requirements (PostgreSQL migrations, S3/GCS object storage, durable queues, OpenTelemetry, and container hardening).
-- **[OpenAPI 3.0.3 Specification](internal/api/openapi.json):** Full OpenAPI specification describing all REST endpoints, parameters, schemas, and responses.
+- **[OpenAPI 3.0.3 Specification](api/openapi.json):** Full OpenAPI specification describing all REST endpoints, parameters, schemas, and responses.
+- **[Security Policy](SECURITY.md):** Threat model, the controls in place, the production deployment checklist, and how to report a vulnerability.
 - **[Contributing Guidelines](CONTRIBUTING.md):** Developer setup, engineering standards, and PR process.
 - **[Code of Conduct](CODE_OF_CONDUCT.md):** Community engagement standards.

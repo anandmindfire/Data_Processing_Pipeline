@@ -9,8 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 	_ "modernc.org/sqlite"
+
+	"github.com/anandmindfire/data-processing-pipeline/internal/models"
 )
 
 var testAggregates = map[string]any{"sum:amount": map[string]float64{"_all": 3}}

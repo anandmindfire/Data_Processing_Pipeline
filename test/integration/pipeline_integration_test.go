@@ -16,7 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anandmindfire/data-processing-pipeline/internal/api/controllers"
+	"go.uber.org/goleak"
+	_ "modernc.org/sqlite"
+
+	"github.com/anandmindfire/data-processing-pipeline/internal/api/handlers"
 	"github.com/anandmindfire/data-processing-pipeline/internal/api/validator"
 	"github.com/anandmindfire/data-processing-pipeline/internal/bootstrap"
 	"github.com/anandmindfire/data-processing-pipeline/internal/config"
@@ -29,8 +32,6 @@ import (
 	"github.com/anandmindfire/data-processing-pipeline/internal/storage"
 	"github.com/anandmindfire/data-processing-pipeline/internal/transformation"
 	"github.com/anandmindfire/data-processing-pipeline/internal/validation"
-	"go.uber.org/goleak"
-	_ "modernc.org/sqlite"
 )
 
 type mockTransport struct {
@@ -113,8 +114,8 @@ func createMockHTTPClient() *http.Client {
 	}
 }
 
-func buildIntegrationJobSpec(csvFile, jsonFile, exportJSON, exportCSV, exportSQL, deadLetterPath string) models.Config {
-	return models.Config{
+func buildIntegrationJobSpec(csvFile, jsonFile, exportJSON, exportCSV, exportSQL, deadLetterPath string) models.JobSpec {
+	return models.JobSpec{
 		Sources: []models.Source{
 			{Type: "csv", Name: "employees-csv", Path: csvFile},
 			{Type: "json", Name: "employees-json", Path: jsonFile},
@@ -144,7 +145,7 @@ func buildIntegrationJobSpec(csvFile, jsonFile, exportJSON, exportCSV, exportSQL
 	}
 }
 
-func submitIntegrationJob(t *testing.T, server http.Handler, spec models.Config) string {
+func submitIntegrationJob(t *testing.T, server http.Handler, spec models.JobSpec) string {
 	t.Helper()
 	bodyBytes, err := json.Marshal(spec)
 	if err != nil {
@@ -258,8 +259,8 @@ func verifySQLiteDatabase(t *testing.T, path string, expectedRecords int) {
 
 // newServer wires the production router around a custom service, sandboxed to dir.
 func newServer(cfg *config.Config, service *services.PipelineService, dir string) (http.Handler, func()) {
-	ctrl := controllers.NewPipelineController(service, cfg.MaxRequestBodyBytes, validator.DefaultPolicy(dir, dir))
-	deps := &bootstrap.Dependencies{Config: cfg, Service: service, Controller: ctrl}
+	ctrl := handlers.NewPipelineHandler(service, cfg.MaxRequestBodyBytes, validator.DefaultPolicy(dir, dir))
+	deps := &bootstrap.Dependencies{Config: cfg, Service: service, Handler: ctrl}
 	router := bootstrap.BuildRouter(deps)
 	cleanup := func() {
 		if deps.Limiter != nil {
@@ -400,7 +401,7 @@ func TestPipelineCancellation(t *testing.T) {
 	server, cleanupServer := newServer(cfg, service, tempDir)
 	defer cleanupServer()
 
-	jobSpec := models.Config{
+	jobSpec := models.JobSpec{
 		Sources: []models.Source{
 			{Type: "http", Name: "slow-source", URL: "https://api.company.internal/slow", Format: "json"},
 		},
@@ -491,7 +492,7 @@ func TestPipelineMidRunProgress(t *testing.T) {
 	server, cleanupServer := newServer(cfg, service, tempDir)
 	defer cleanupServer()
 
-	jobSpec := models.Config{
+	jobSpec := models.JobSpec{
 		Sources: []models.Source{
 			{Type: "http", Name: "gate-source", URL: "https://api.company.internal/gate", Format: "json"},
 		},
@@ -593,7 +594,7 @@ func TestPipelineFailedIngestion(t *testing.T) {
 	server, cleanupServer := newServer(cfg, service, tempDir)
 	defer cleanupServer()
 
-	jobSpec := models.Config{
+	jobSpec := models.JobSpec{
 		Sources: []models.Source{
 			{Type: "csv", Name: "nonexistent-file", Path: filepath.Join(tempDir, "does_not_exist.csv")},
 		},

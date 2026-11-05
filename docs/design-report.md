@@ -26,9 +26,11 @@ Every pipeline job executes under a hierarchical `context.Context` derived from 
 
 | Decision | Choice Made | Rationale & Trade-offs |
 | :--- | :--- | :--- |
-| **Persistence** | Embedded SQLite (`database/sql` + pure-Go `modernc.org/sqlite`, WAL, versioned migrations) behind `storage.Repository`; in-memory store for tests | Durable, queryable job/record/error store with no external service and no CGO. Writes are batched (500 records / 256 errors per transaction). Single-node by design; the interface allows a Postgres implementation for multi-replica deployments. |
+| **Persistence** | One `database/sql` repository with SQLite (default) and PostgreSQL dialects | SQLite needs no external service for a single node; PostgreSQL enables replicas. Shared code means one contract test suite runs against memory, SQLite and PostgreSQL. |
+| **Multi-replica coordination** | Job owner + heartbeat lease, cancel flag polled by the owner, stale-job recovery | No message broker needed; cancel latency ~1 s, crash detection ≈ `JOB_LEASE`. A partitioned owner could finish a job after it was failed (its final save wins). |
+| **API keys** | Admin key mints expiring, revocable keys, stored as SHA-256 hashes, cached 15 s | Full-entropy secrets make fast hashing safe; the cache keeps auth off the database on hot paths at the cost of ≤ 15 s revocation lag across replicas. |
 | **Live Progress** | Progress tracker owns `job.Metrics` and persists a snapshot every 500 ms | Progress is visible while the job runs without sharing mutable state across goroutines; the trade-off is up to 500 ms of staleness. `percent_complete` is relative to records discovered so far, because streamed sources have no known total. |
-| **State Synchronization** | Fan-In sequential aggregation | Eliminates mutex contention on the hot path. Memory footprint scales with aggregate group cardinality. |
+| **Aggregation** | Single fan-in aggregator by default; optional `aggregation_workers` partials merged at the end | Lock-free either way. Partials pay off when many CPU-heavy definitions are computed; the merge is exact because count/sum/avg/min/max are associative. Memory scales with group cardinality × workers. |
 | **Fault Tolerance** | Quarantine pattern + Dead-Letter sink | Isolates corrupted records with stage metadata; 1 bad row does not fail the batch. Unrecoverable rows exported to disk. |
 | **Ingestion Resilience** | HTTP 3x exponential backoff retry | Transparently absorbs transient network hiccups and 5xx server errors without failing the pipeline. |
 | **Streaming Export** | Export goroutine streams batches to JSON, CSV, a real SQLite database and a SQL dump; files are published by atomic rename | Bounded memory (CSV/SQL headers are spooled to disk) and no partial files for cancelled/failed jobs. Aggregations go to an `aggregations` table or a JSON sidecar. |
@@ -36,4 +38,4 @@ Every pipeline job executes under a hierarchical `context.Context` derived from 
 | **Lifecycle** | `WithCancelCause` per job; graceful drain on `SIGTERM`; restart reconciliation | Every terminal job records why it ended; no job is left `RUNNING` after a crash. |
 | **API Transport & Routing** | `net/http` + `chi/v5` router | Zero-allocation routing with subrouter mounting, URL parameter extraction, and standard middleware chaining. |
 
-See [docs/production-readiness.md](docs/production-readiness.md) for the roadmap bridging this codebase into multi-node Kubernetes enterprise deployments.
+See [production-readiness.md](production-readiness.md) and [SECURITY.md](../SECURITY.md) for the roadmap bridging this codebase into multi-node Kubernetes enterprise deployments.

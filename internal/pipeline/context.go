@@ -12,8 +12,3 @@ func CreateJobContext(parent context.Context, timeoutSeconds int) (context.Conte
 	}
 	return context.WithTimeout(parent, time.Duration(timeoutSeconds)*time.Second)
 }
-
-// IsCancelled returns true if the context was cancelled or reached its deadline.
-func IsCancelled(ctx context.Context) bool {
-	return ctx.Err() != nil
-}

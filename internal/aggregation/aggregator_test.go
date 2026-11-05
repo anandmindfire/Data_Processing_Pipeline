@@ -1,6 +1,7 @@
 package aggregation
 
 import (
+	"math"
 	"testing"
 
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
@@ -72,4 +73,41 @@ func assertGroupMap(t *testing.T, res map[string]any, key string) map[string]flo
 		t.Fatalf("expected map[string]float64 for key %q, got %T", key, res[key])
 	}
 	return m
+}
+
+func TestMergeMatchesSequentialAggregation(t *testing.T) {
+	defs := []models.Aggregation{
+		{GroupBy: "g", Field: "v", Operation: "count", Name: "c"},
+		{GroupBy: "g", Field: "v", Operation: "sum", Name: "s"},
+		{GroupBy: "g", Field: "v", Operation: "avg", Name: "a"},
+		{GroupBy: "g", Field: "v", Operation: "min", Name: "lo"},
+		{GroupBy: "g", Field: "v", Operation: "max", Name: "hi"},
+	}
+	var records []models.Record
+	for i := 0; i < 1000; i++ {
+		records = append(records, models.Record{"g": []string{"x", "y", "z"}[i%3], "v": float64((i * 37) % 101)})
+	}
+
+	seq := NewAggregator(defs)
+	for _, r := range records {
+		seq.Process(r)
+	}
+
+	final := NewAggregator(defs)
+	for w := 0; w < 4; w++ {
+		part := NewAggregator(defs)
+		for i := w; i < len(records); i += 4 {
+			part.Process(records[i])
+		}
+		final.Merge(part)
+	}
+
+	want, got := seq.Finalize(), final.Finalize()
+	for name, groups := range want {
+		for g, v := range groups.(map[string]float64) {
+			if gv := got[name].(map[string]float64)[g]; math.Abs(gv-v) > 1e-9 {
+				t.Fatalf("%s[%s]: merged %v != sequential %v", name, g, gv, v)
+			}
+		}
+	}
 }
