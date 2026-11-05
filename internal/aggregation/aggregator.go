@@ -44,7 +44,13 @@ func (a *MetricsAggregator) Process(r models.Record) {
 		key := BuildAggKey(def)
 		group := resolveGroup(r, def.GroupBy)
 
-		v, isNum := validation.ParseNumber(r[def.Field])
+		raw, present := r[def.Field]
+		// count behaves like SQL COUNT(field): only records where the field has a value. In jobs
+		// that mix sources this keeps records from other sources out of the groups.
+		if !present || validation.IsBlank(raw) {
+			continue
+		}
+		v, isNum := validation.ParseNumber(raw)
 		if !isNum && !strings.EqualFold(def.Operation, "count") {
 			continue
 		}

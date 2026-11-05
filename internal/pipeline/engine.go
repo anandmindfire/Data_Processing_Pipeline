@@ -123,7 +123,7 @@ func (p *Pipeline) Execute(parent context.Context, job *models.Job, onUpdate fun
 
 	slog.Info("pipeline job started", "job_id", job.ID, "sources_count", len(cfg.Sources))
 	p.collector.IncJobsTotal()
-	now := time.Now()
+	now := time.Now().UTC()
 	job.Status = models.StatusRunning
 	job.Metrics.StartedAt = now
 	job.Metrics.StageLatency = make(map[string]time.Duration)
@@ -144,7 +144,7 @@ func (p *Pipeline) Execute(parent context.Context, job *models.Job, onUpdate fun
 	snapshot := func(m models.Metrics) {
 		s := base
 		s.Metrics = m
-		s.UpdatedAt = time.Now()
+		s.UpdatedAt = time.Now().UTC()
 		p.persist(&s)
 	}
 

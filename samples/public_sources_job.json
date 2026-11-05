@@ -1,0 +1,53 @@
+{
+  "sources": [
+    {
+      "type": "csv",
+      "name": "iris",
+      "url": "https://archive.ics.uci.edu/ml/machine-learning-databases/iris/iris.data",
+      "has_header": false,
+      "columns": ["sepal_length", "sepal_width", "petal_length", "petal_width", "species"]
+    },
+    {
+      "type": "csv",
+      "name": "height-weight",
+      "url": "https://people.sc.fsu.edu/~jburkardt/data/csv/hw_200.csv"
+    },
+    {
+      "type": "http",
+      "name": "posts",
+      "url": "https://jsonplaceholder.typicode.com/posts",
+      "format": "json"
+    },
+    {
+      "type": "http",
+      "name": "users",
+      "url": "https://randomuser.me/api/?results=10",
+      "format": "json",
+      "records_path": "results"
+    }
+  ],
+  "rules": [
+    { "field": "sepal_length", "type": "number", "min": 0 },
+    { "field": "petal_length", "type": "number", "min": 0 },
+    { "field": "species", "type": "string", "pattern": "^Iris-", "normalize": "lower" },
+    { "field": "Height(Inches)", "type": "number", "min": 0, "rename": "height_in" },
+    { "field": "Weight(Pounds)", "type": "number", "min": 0, "rename": "weight_lb" },
+    { "field": "userId", "type": "number" },
+    { "field": "gender", "type": "string", "normalize": "lower" }
+  ],
+  "aggregations": [
+    { "group_by": "_source", "field": "_source", "operation": "count", "name": "records_per_source" },
+    { "group_by": "species", "field": "petal_length", "operation": "avg", "name": "avg_petal_length_by_species" },
+    { "field": "height_in", "operation": "avg", "name": "avg_height_in" },
+    { "group_by": "userId", "field": "userId", "operation": "count", "name": "posts_per_user" },
+    { "group_by": "gender", "field": "gender", "operation": "count", "name": "users_by_gender" }
+  ],
+  "exports": [
+    { "type": "json", "path": "public_sources.json" },
+    { "type": "sqlite", "path": "public_sources.db" }
+  ],
+  "include_source_field": true,
+  "validation_workers": 4,
+  "transform_workers": 4,
+  "timeout_seconds": 60
+}

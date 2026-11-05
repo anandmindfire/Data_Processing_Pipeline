@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/anandmindfire/data-processing-pipeline/internal/models"
+	"github.com/anandmindfire/data-processing-pipeline/internal/validation"
 )
 
 // Transformer defines the behavior for applying normalization and transformations.
@@ -26,6 +27,13 @@ func (t *RecordTransformer) Transform(r models.Record, rules []models.Rule) (mod
 	for _, rule := range rules {
 		val := applyDefaultEnrichment(out, rule)
 		if val == nil {
+			continue
+		}
+		if validation.IsBlank(val) {
+			// A blank cell in a typed field becomes null instead of an invalid number/boolean.
+			if isTyped(rule) {
+				out[rule.Field] = nil
+			}
 			continue
 		}
 
@@ -60,4 +68,10 @@ func (t *RecordTransformer) Transform(r models.Record, rules []models.Rule) (mod
 		}
 	}
 	return out, nil
+}
+
+// isTyped reports whether a rule converts its field to a number or boolean.
+func isTyped(rule models.Rule) bool {
+	t := strings.ToLower(rule.Type)
+	return t == "number" || t == "boolean" || t == "bool"
 }

@@ -206,7 +206,7 @@ func (p *Pipeline) finalizeJob(
 	// Source credentials are only needed while the job runs; do not keep them at rest.
 	job.Spec = job.Spec.WithRedactedHeaders()
 
-	now := time.Now()
+	now := time.Now().UTC()
 	job.Metrics.EndedAt = &now
 	updateThroughput(&job.Metrics, job.Metrics.StartedAt, now)
 	job.UpdatedAt = now

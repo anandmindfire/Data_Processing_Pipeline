@@ -137,8 +137,31 @@ func validateSourceKind(prefix string, s *models.Source) []error {
 	if !sourceFormats[s.Format] {
 		errs = append(errs, fmt.Errorf("%s: format must be csv, json or ndjson (got %q)", prefix, s.Format))
 	}
-	if s.RecordsPath != "" && (s.Format == "csv" || (s.Format == "" && s.Type == "csv")) {
+	isCSV := s.Format == "csv" || (s.Format == "" && s.Type == "csv")
+	if s.RecordsPath != "" && isCSV {
 		errs = append(errs, fmt.Errorf("%s: records_path only applies to JSON sources", prefix))
+	}
+	if !isCSV && (s.HasHeader != nil || len(s.Columns) > 0 || s.Delimiter != "") {
+		errs = append(errs, fmt.Errorf("%s: has_header, columns and delimiter only apply to CSV sources", prefix))
+	}
+	errs = append(errs, validateCSVOptions(prefix, s)...)
+	return errs
+}
+
+// validateCSVOptions checks the delimiter and column names of a CSV source.
+func validateCSVOptions(prefix string, s *models.Source) []error {
+	var errs []error
+	if d := []rune(s.Delimiter); s.Delimiter != "" && (len(d) != 1 || d[0] == '"' || d[0] == '\r' || d[0] == '\n') {
+		errs = append(errs, fmt.Errorf("%s: delimiter must be a single character other than quote or newline", prefix))
+	}
+	seen := make(map[string]bool, len(s.Columns))
+	for _, c := range s.Columns {
+		c = strings.TrimSpace(c)
+		if c == "" || seen[c] {
+			errs = append(errs, fmt.Errorf("%s: columns must be unique, non-empty names", prefix))
+			break
+		}
+		seen[c] = true
 	}
 	return errs
 }

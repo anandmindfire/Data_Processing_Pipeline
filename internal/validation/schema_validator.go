@@ -41,6 +41,15 @@ func ParseBool(v any) (bool, bool) {
 }
 
 // checkRequired validates that a required field is present and non-empty.
+// IsBlank reports whether a value is absent in practice: nil or a whitespace-only string.
+func IsBlank(v any) bool {
+	if v == nil {
+		return true
+	}
+	s, ok := v.(string)
+	return ok && strings.TrimSpace(s) == ""
+}
+
 func checkRequired(field string, value any, ok bool) error {
 	if !ok || value == nil || strings.TrimSpace(fmt.Sprint(value)) == "" {
 		return fmt.Errorf("field %q: %w", field, ErrRequiredField)
